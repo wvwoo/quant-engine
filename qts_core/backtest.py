@@ -92,18 +92,20 @@ def _synthetic_chain(
 ) -> tuple[OptionQuote, ...]:
     """MODELED ATM call quote: BS mid at the stated IV, 3c-wide market (the
     report's own liquidity example)."""
-    strike_cents = int(round(spot / 5.0) * 5) * 100  # nearest $5 strike
+    grid = cfg.backtest_strike_grid_cents
+    strike_cents = round(spot * 100 / grid) * grid
     mid = _premium_cents(
         spot, strike_cents / 100.0, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
     )
+    half = cfg.backtest_quote_width_cents // 2
     return (
         OptionQuote(
             underlying=sess.symbol,
             expiry=sess.session_date,
             strike_cents=strike_cents,
             right="C",
-            bid_cents=max(mid - 1, 1),
-            ask_cents=mid + 2,
+            bid_cents=max(mid - half, 1),
+            ask_cents=mid + (cfg.backtest_quote_width_cents - half),
             volume=1000,
             open_interest=1000,
             received_at=now,

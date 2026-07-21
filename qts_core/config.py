@@ -72,6 +72,17 @@ class StrategyConfig:
     daily_loss_limit_cents: int = 21_250  # 25% of sub-portfolio
     live_trading: bool = False
 
+    # --- provider / data shaping (were literals in the provider) ----------
+    bars_fetch_days: int = 30
+    max_strikes_around_atm: int = 12
+    min_request_interval_s: float = 1.0
+    max_intraday_days: int = 59
+
+    # --- backtest MODELED chain (were literals in backtest.py) ------------
+    backtest_strike_grid_cents: int = 500
+    backtest_quote_width_cents: int = 3
+    backtest_atm_iv: float = 0.20
+
     # --- pricing model ----------------------------------------------------
     risk_free_rate: float = 0.045
 
@@ -176,6 +187,46 @@ PROVENANCE: dict[str, tuple[Tier, str]] = {
     "live_trading": (
         Tier.SAFETY,
         "OFF. Real-money trading is an owner-exclusive act; see require_paper_mode().",
+    ),
+    "bars_fetch_days": (
+        Tier.ASSUMPTION,
+        "calendar days of intraday history requested per call. Was a literal days=10 in the "
+        "provider, which can supply at most ~9 prior sessions — while every decision blob "
+        "advertised a 20-day RVOL baseline (finding G-05). 30 calendar days ~ 20 sessions, "
+        "so the label and the data now agree. Does NOT change rvol_min.",
+    ),
+    "max_strikes_around_atm": (
+        Tier.ASSUMPTION,
+        "strikes kept either side of spot when converting a chain. NOTE: a held contract "
+        "can drift OUT of this window as the underlying moves, which is one way the exit "
+        "path loses its mark — see the FORCE_FLAT_UNMARKED rail.",
+    ),
+    "min_request_interval_s": (
+        Tier.ASSUMPTION,
+        "client-side spacing between provider calls. Yahoo throttles per client, so the "
+        "limiter is shared per process, not per symbol. Overridable via "
+        "QTS_MIN_REQUEST_INTERVAL_S for slow links.",
+    ),
+    "max_intraday_days": (
+        Tier.ASSUMPTION,
+        "yfinance caps 5m history at ~60 days; requests are clamped to this.",
+    ),
+    "backtest_strike_grid_cents": (
+        Tier.ASSUMPTION,
+        "MODELED chain snaps to a $5 strike grid. This is a BACKTEST ARTIFACT and a named "
+        "cause of the 79.1% contract_gates failure rate: real SPY lists $1 strikes, so the "
+        "synthetic ATM strike can sit up to $2.50 from spot and miss the 0.45-0.55 delta "
+        "band far more often than a real chain would. Configurable so the artifact can be "
+        "measured rather than argued about.",
+    ),
+    "backtest_quote_width_cents": (
+        Tier.ASSUMPTION,
+        "MODELED bid/ask width around the BS mid (the report's own liquidity example).",
+    ),
+    "backtest_atm_iv": (
+        Tier.ASSUMPTION,
+        "flat ATM IV for the MODELED premium path. B2 is open (no real historical option "
+        "premiums), so every number derived from this is MODELED by construction.",
     ),
     "risk_free_rate": (
         Tier.ASSUMPTION,

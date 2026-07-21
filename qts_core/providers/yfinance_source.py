@@ -22,6 +22,7 @@ from typing import Any
 
 from qts_core.cache import DiskCache, RateLimiter
 from qts_core.clock import NY, to_et
+from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
 from qts_core.money import MoneyError, cents_from_quote
 
@@ -124,8 +125,12 @@ def quotes_from_chain_rows(
 
 
 # One shared limiter per process: Yahoo throttles per client, not per symbol,
-# so a per-source limiter would let a 3-symbol run fire 3x the rate.
-_LIMITER = RateLimiter(float(os.environ.get("QTS_MIN_REQUEST_INTERVAL_S", "1.0")))
+# so a per-source limiter would let a 3-symbol run fire 3x the rate. The
+# default comes from config (provenance-tagged); the env var stays as a slow-
+# link override.
+_LIMITER = RateLimiter(
+    float(os.environ.get("QTS_MIN_REQUEST_INTERVAL_S", StrategyConfig().min_request_interval_s))
+)
 
 
 class YFinanceSource:
@@ -137,9 +142,17 @@ class YFinanceSource:
     the legacy scanner (finding no-rate-limit-no-cache).
     """
 
-    def __init__(self, symbol: str, cache: DiskCache | None = None) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        cache: DiskCache | None = None,
+        cfg: StrategyConfig | None = None,
+    ) -> None:
         self.symbol = symbol.upper()
         self.cache = cache if cache is not None else DiskCache()
+        # Data shaping is strategy-relevant (bars_fetch_days bounds the RVOL
+        # baseline), so it lives in config with provenance, not in literals.
+        self.cfg = cfg if cfg is not None else StrategyConfig()
 
     def _ticker(self):  # type: ignore[no-untyped-def]
         import yfinance as yf
@@ -158,7 +171,11 @@ class YFinanceSource:
         """B4 gate: 0DTE availability is CHECKED, never assumed."""
         return session_date in self.expirations(session_date)
 
-    def fetch_bars(self, *, now: dt.datetime, days: int = 10, interval_min: int = 5) -> list[Bar]:
+    def fetch_bars(
+        self, *, now: dt.datetime, days: int | None = None, interval_min: int | None = None
+    ) -> list[Bar]:
+        days = self.cfg.bars_fetch_days if days is None else days
+        interval_min = self.cfg.bar_interval_min if interval_min is None else interval_min
         hist = self._ticker().history(
             period=f"{days}d",
             interval=f"{interval_min}m",
@@ -187,7 +204,13 @@ class YFinanceSource:
             return []  # listed expiry with an empty book: report, never crash
         rows = [dict(r) for _, r in calls.iterrows()]
         return quotes_from_chain_rows(
-            rows, underlying=self.symbol, expiry=session_date, right="C", now=now, spot=spot
+            rows,
+            underlying=self.symbol,
+            expiry=session_date,
+            right="C",
+            now=now,
+            spot=spot,
+            max_strikes_around_atm=self.cfg.max_strikes_around_atm,
         )
 
     def build_view(self, *, now: dt.datetime, session_date: dt.date) -> MarketView:

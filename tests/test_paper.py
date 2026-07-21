@@ -467,3 +467,59 @@ class TestForceFlatWithoutMark:
         assert r.fills == ()
         after = s.any_open_position()
         assert after == before, "state must be unchanged when there is no mark"
+
+
+class TestEquityIsAlwaysMeasured:
+    """G-15: equity was recorded only on steps that held a markable position.
+    On a no-trade day — which the measured evidence says is nearly every day —
+    the series stayed empty and the dashboard fell back to the CONFIGURED
+    $850, presenting a mandate as a measurement."""
+
+    def test_vetoed_step_still_snapshots_equity(self, tmp_path: Path) -> None:
+        s = make_session(tmp_path / "s.db")
+        r = s.step(make_view(breakout=False))
+        assert r.decision is not None and not r.decision.approved
+        series = s.store.equity_series(SESSION)
+        assert len(series) == 1, "a day with no trade recorded no equity at all"
+        assert series[0][1] == CFG.sub_portfolio_cents  # cash, nothing spent
+        assert series[0][2] == 0  # no open value
+
+    def test_after_force_flat_step_snapshots(self, tmp_path: Path) -> None:
+        s = make_session(tmp_path / "s.db")
+        s.step(make_view(et(15, 45)))
+        assert len(s.store.equity_series(SESSION)) == 1
+
+    def test_snapshot_is_portfolio_wide_not_symbol_scoped(self, tmp_path: Path) -> None:
+        """live.py hands ONE `now` to every symbol and the equity table keys on
+        the timestamp, so the last symbol's row overwrites the rest (N-10).
+        Every symbol must therefore compute the SAME portfolio figure."""
+        db = tmp_path / "s.db"
+        store = StateStore(db)
+        nvda = PaperSession(
+            store,
+            PaperBroker(CFG, CFG.tick_schedule_for("NVDA")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=OPEN,
+            force_flat_at=FLAT_AT,
+            symbol="NVDA",
+        )
+        entered = nvda.step(make_view())
+        assert entered.position is not None
+        after_holder = store.equity_series(SESSION)[-1]
+
+        spy = PaperSession(
+            store,
+            PaperBroker(CFG, CFG.tick_schedule_for("SPY")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=OPEN,
+            force_flat_at=FLAT_AT,
+            symbol="SPY",
+        )
+        r = spy.step(make_view())
+        assert r.halted is not None and r.halted.startswith("CAPITAL_COMMITTED")
+        after_other = store.equity_series(SESSION)[-1]
+        assert after_other[1] == after_holder[1], (
+            "a non-holding symbol overwrote the portfolio cash with its own view"
+        )

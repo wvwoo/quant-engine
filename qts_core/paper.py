@@ -239,13 +239,16 @@ class PaperSession:
                 # Capital is a SHARED, concentrated sub-portfolio: while any
                 # symbol holds a position, no other symbol may open one. The
                 # holder's own view manages its exits.
+                self._snapshot_portfolio(now, view.chain)
                 return StepResult(None, (), None, halted=f"CAPITAL_COMMITTED:{pos.symbol}")
             return self._manage_exits(pos, view)
 
         # -- flat: entry path, guarded by the safety rails ----------------
         if -realized_today >= self.cfg.daily_loss_limit_cents:
+            self._snapshot_portfolio(now, view.chain)
             return StepResult(None, (), None, halted="DAILY_LOSS_LIMIT")
         if now >= self.force_flat_at:
+            self._snapshot_portfolio(now, view.chain)
             return StepResult(None, (), None, halted="AFTER_FORCE_FLAT")
 
         decision = evaluate_entry(view, self.cfg, self.session_open_et)
@@ -253,6 +256,7 @@ class PaperSession:
             now, self.session_date, decision.symbol, decision.approved, _decision_blob(decision)
         )
         if not decision.approved or decision.selection is None:
+            self._snapshot_portfolio(now, view.chain)
             return StepResult(decision, (), None, None)
 
         sel = decision.selection
@@ -265,6 +269,7 @@ class PaperSession:
             capital,
         )
         if sized.contracts == 0:
+            self._snapshot_portfolio(now, view.chain)
             return StepResult(decision, (), None, None)
 
         seq = self.store.next_seq(self.session_date)
@@ -315,6 +320,7 @@ class PaperSession:
             # (ADR-008 / B3) — was skipped in exactly the situation it exists
             # for: a contract that stopped being quotable near the close (G-01).
             if now < self.force_flat_at:
+                self._snapshot_portfolio(now, view.chain)
                 return StepResult(None, (), pos, halted="NO_MARK")
             return self._force_flat_unmarked(pos, now, view.chain)
         tick = self.cfg.tick_schedule_for(pos.symbol)
@@ -432,6 +438,24 @@ class PaperSession:
             self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
         self._snapshot(now, chain, new_state)
         return StepResult(None, (fill,), new_state, halted=reason)
+
+    def _snapshot_portfolio(self, now: dt.datetime, chain: tuple[Any, ...]) -> None:
+        """Snapshot equity for the PORTFOLIO, whichever symbol is stepping.
+
+        Two reasons this reads the position from the ledger rather than taking
+        the caller's:
+
+        1. Equity used to be recorded only on steps that held a markable
+           position, so on a day with no trade — which the measured evidence
+           says is nearly every day — the series stayed empty and the dashboard
+           displayed the configured $850 as if it had been computed (G-15).
+        2. The equity table is keyed on the timestamp alone, and live.py passes
+           ONE `now` to every symbol in the pass, so the last symbol's row
+           overwrites the others (N-10). Computing the same portfolio-wide
+           figure for every symbol makes that overwrite idempotent instead of
+           order-dependent.
+        """
+        self._snapshot(now, chain, self.any_open_position())
 
     def _snapshot(
         self,

@@ -30,7 +30,7 @@
             "name": "rvol",
             "passed": true,
             "reason": "volume expansion confirmed",
-            "threshold": ">= 2.0 (per_bar, 20d)",
+            "threshold": ">= 2.0 (per_bar, N=20 of 20d)",
             "value": "3.00"
           },
           {

@@ -30,15 +30,15 @@ from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.money import fmt
 from qts_core.providers.yfinance_source import YFinanceSource
 
-MAX_INTRADAY_DAYS = 59  # yfinance hard limit for 5m bars
-
 
 def build_sessions(
     symbol: str, days: int, cfg: StrategyConfig, now: dt.datetime
 ) -> list[SessionData]:
     """Group real intraday bars into per-session SessionData, oldest first."""
     source = YFinanceSource(symbol)
-    bars = source.fetch_bars(now=now, days=min(days, MAX_INTRADAY_DAYS), interval_min=5)
+    bars = source.fetch_bars(
+        now=now, days=min(days, cfg.max_intraday_days), interval_min=cfg.bar_interval_min
+    )
     by_day: dict[dt.date, list] = {}
     for b in bars:
         by_day.setdefault(to_et(b.ts_close).date(), []).append(b)
@@ -61,7 +61,7 @@ def build_sessions(
                 bars=tuple(by_day[day]),
                 prior_sessions=priors,
                 symbol=symbol,
-                atm_iv=0.20,  # ASSUMPTION: flat ATM IV; see printout
+                atm_iv=cfg.backtest_atm_iv,  # ASSUMPTION; printed above the numbers
             )
         )
     return sessions
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Backtest on real bars (MODELED options P&L).")
     ap.add_argument("--symbol", default="SPY")
     ap.add_argument("--days", type=int, default=30)
-    ap.add_argument("--atm-iv", type=float, default=0.20)
+    ap.add_argument("--atm-iv", type=float, default=StrategyConfig().backtest_atm_iv)
     ap.add_argument(
         "--diagnose",
         action="store_true",
@@ -148,7 +148,9 @@ def main(argv: list[str] | None = None) -> int:
     require_paper_mode(cfg)  # BOOT gate: before the clock, the network, any output
     now = TradingClock.system().now_utc()
     sessions = build_sessions(args.symbol, args.days, cfg, now)
-    if args.atm_iv != 0.20:
+    # Compare against the CONFIGURED default, not a second copy of the literal:
+    # the two drifting apart would silently ignore --atm-iv (G-16).
+    if args.atm_iv != cfg.backtest_atm_iv:
         sessions = [dataclasses.replace(s, atm_iv=args.atm_iv) for s in sessions]
     if not sessions:
         print(f"[halt] no usable sessions for {args.symbol} in the last {args.days} days")

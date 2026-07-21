@@ -192,12 +192,17 @@ def evaluate_entry(
 
     rv = ind.rvol(view.bars, view.prior_sessions, view.now, cfg.rvol_lookback_days, cfg.rvol_mode)
     rvol_ok = rv is not None and rv >= cfg.rvol_min
+    # Report the sessions ACTUALLY supplied, not the number requested. The
+    # live path could only ever provide ~9 while every decision blob and every
+    # report asserted a 20-day baseline (G-05). The threshold itself is
+    # untouched — only the label was lying.
+    rvol_n = min(len(view.prior_sessions), cfg.rvol_lookback_days)
     checks.append(
         CheckResult(
             "rvol",
             rvol_ok,
             _fmt(rv),
-            f">= {cfg.rvol_min:.1f} ({cfg.rvol_mode}, {cfg.rvol_lookback_days}d)",
+            f">= {cfg.rvol_min:.1f} ({cfg.rvol_mode}, N={rvol_n} of {cfg.rvol_lookback_days}d)",
             "volume expansion confirmed"
             if rvol_ok
             else ("no prior-session baseline" if rv is None else "insufficient relative volume"),

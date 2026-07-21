@@ -15,7 +15,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 ./ci.sh
 
 # 3) خطوة paper حيّة واحدة (بيانات yfinance مؤجّلة، السوق مفتوحًا)
-.venv/bin/python -m qts_core.live --symbol SPY --db qts_v8/state/paper.db \
+.venv/bin/python -m qts_core.live --symbols SPY --db qts_v8/state/paper.db \
     --report qts_v8/state/session_report.md
 
 # 4) اللوحة (كل رقم فيها من الخادم)

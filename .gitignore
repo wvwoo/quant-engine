@@ -33,3 +33,8 @@ Algorithmic Options Trade Explained - Google Gemini_files/
 
 # --- macOS ---
 .DS_Store
+
+# --- provider response cache (regenerated; the *.json rule above does NOT
+# --- match a subdirectory — gitignore's * never crosses a '/') ---
+qts_v8/state/cache/
+*.tmp

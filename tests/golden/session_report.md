@@ -24,7 +24,7 @@
 | **trading_window** | 10:15 ET | 09:46-11:30 ET | 🟢 PASS |
 | **orb_breakout** | close 204.22 vs ORB high 204.10 | close > ORB high | 🟢 PASS |
 | **vwap_alignment** | close 204.22 vs VWAP 203.86 | close > session VWAP | 🟢 PASS |
-| **rvol** | 3.00 | >= 2.0 (per_bar, 20d) | 🟢 PASS |
+| **rvol** | 3.00 | >= 2.0 (per_bar, N=20 of 20d) | 🟢 PASS |
 | **rsi_non_overbought** | 67.0 | < 70 (Wilder-14, ASSUMPTION) | 🟢 PASS |
 | **macd_histogram** | 0.0544 | > 0 (12/26/9, ASSUMPTION) | 🟢 PASS |
 | **contract_gates** | NVDA260617C00205000 | 0DTE 0.45<=delta<=0.55, IV<95%, spread<=5c & <=350bp | 🟢 PASS |
