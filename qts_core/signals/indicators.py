@@ -17,6 +17,7 @@ Look-ahead constructions (findings LA-*):
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 from collections.abc import Sequence
 
 from qts_core.clock import to_et
@@ -100,7 +101,7 @@ def rsi(closes: Sequence[float], period: int) -> float | None:
         return None
     gains: list[float] = []
     losses: list[float] = []
-    for prev, cur in zip(closes, closes[1:], strict=False):
+    for prev, cur in itertools.pairwise(closes):
         change = cur - prev
         gains.append(max(change, 0.0))
         losses.append(max(-change, 0.0))
@@ -123,9 +124,7 @@ def _ema_series(values: Sequence[float], period: int) -> list[float]:
     return out
 
 
-def macd_histogram(
-    closes: Sequence[float], fast: int, slow: int, signal: int
-) -> float | None:
+def macd_histogram(closes: Sequence[float], fast: int, slow: int, signal: int) -> float | None:
     """MACD histogram (macd - signal). None until slow+signal closes exist."""
     if len(closes) < slow + signal:
         return None

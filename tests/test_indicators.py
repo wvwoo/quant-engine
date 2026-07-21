@@ -20,9 +20,7 @@ def et(hh: int, mm: int, day: int = 17) -> dt.datetime:
     return dt.datetime(2026, 6, day, hh, mm, tzinfo=NY)
 
 
-def bar(
-    hh: int, mm: int, *, day: int = 17, o: float, h: float, lo: float, c: float, v: int
-) -> Bar:
+def bar(hh: int, mm: int, *, day: int = 17, o: float, h: float, lo: float, c: float, v: int) -> Bar:
     return Bar(ts_close=et(hh, mm, day), open=o, high=h, low=lo, close=c, volume=v)
 
 

@@ -13,6 +13,7 @@ from qts_core.money import CONTRACT_MULTIPLIER, TickSchedule
 from qts_core.risk import (
     ExitReason,
     Phase,
+    PositionState,
     daily_loss_breached,
     evaluate,
     open_position,
@@ -29,7 +30,7 @@ def t(hh: int, mm: int) -> dt.datetime:
     return dt.datetime(2026, 6, 17, hh, mm, tzinfo=NY)
 
 
-def nvda_position(contracts: int = 2) -> "object":
+def nvda_position(contracts: int = 2) -> PositionState:
     # Entry quote $4.20; actual fill basis $424.20/contract (report's slipped cost).
     return open_position(
         symbol="NVDA",
@@ -104,7 +105,7 @@ class TestExitLadder:
         assert not orders
         assert st.peak_premium_cents == 1000
         # trail now 880; 875 must trigger
-        st2, orders = evaluate(st, 875, t(10, 55), FLAT_AT, CFG, TICK)
+        _st2, orders = evaluate(st, 875, t(10, 55), FLAT_AT, CFG, TICK)
         assert [o.reason for o in orders] == [ExitReason.TRAIL]
 
     def test_new_peak_does_not_self_trigger(self) -> None:
@@ -180,8 +181,11 @@ class TestLevelSweep:
     @pytest.mark.parametrize("quote", range(100, 3000, 37))
     def test_level_ordering(self, quote: int) -> None:
         pos = open_position(
-            symbol="X", occ_symbol="X", contracts=2,
-            entry_quote_cents=quote, fill_cost_per_contract_cents=quote * 101,
+            symbol="X",
+            occ_symbol="X",
+            contracts=2,
+            entry_quote_cents=quote,
+            fill_cost_per_contract_cents=quote * 101,
         )
         stop = pos.stop_level(CFG)
         floor = pos.runner_floor(CFG)

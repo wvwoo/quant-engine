@@ -76,7 +76,7 @@ class TestReportArithmetic:
         # Finding tranche1-principal-shortfall: selling 1 contract at $840
         # recovers $840.00 against $848.40 deployed — $8.40 stays at risk,
         # so "entirely risk-free" is false by exactly this amount.
-        _, unit, gross, _ = size_position(85000, 420, 100)
+        _, _unit, gross, _ = size_position(85000, 420, 100)
         proceeds_one_contract = 840 * CONTRACT_MULTIPLIER
         assert gross - proceeds_one_contract == 840  # cents == $8.40
 

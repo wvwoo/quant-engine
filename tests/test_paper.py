@@ -12,8 +12,6 @@ from qts_core.config import StrategyConfig
 from qts_core.paper import PaperSession, load_fixture_session
 from qts_core.risk import Phase
 from qts_core.store import StateStore
-
-from tests.test_checklist import CFG as _BASE_CFG  # reuse the passing scenario builder
 from tests.test_checklist import OPEN, SESSION, make_view
 
 CFG = StrategyConfig(commission_per_contract_cents=0)  # report arithmetic mode
@@ -114,7 +112,7 @@ class TestExitFlow:
         marked = dc.replace(
             pos_quote, bid_cents=mark_cents - 1, ask_cents=mark_cents + 1, received_at=now
         )
-        return dc.replace(view, chain=(marked,) + view.chain[1:])
+        return dc.replace(view, chain=(marked, *view.chain[1:]))
 
     def test_stop_exit_realizes_loss(self, tmp_path: Path) -> None:
         s = self._entered(tmp_path)
@@ -185,8 +183,11 @@ class TestFixtureRoundtrip:
                     "bars": [
                         {
                             "ts_close": b.ts_close.isoformat(),
-                            "open": b.open, "high": b.high, "low": b.low,
-                            "close": b.close, "volume": b.volume,
+                            "open": b.open,
+                            "high": b.high,
+                            "low": b.low,
+                            "close": b.close,
+                            "volume": b.volume,
                         }
                         for b in view.bars
                     ],
@@ -194,8 +195,11 @@ class TestFixtureRoundtrip:
                         [
                             {
                                 "ts_close": b.ts_close.isoformat(),
-                                "open": b.open, "high": b.high, "low": b.low,
-                                "close": b.close, "volume": b.volume,
+                                "open": b.open,
+                                "high": b.high,
+                                "low": b.low,
+                                "close": b.close,
+                                "volume": b.volume,
                             }
                             for b in sess
                         ]

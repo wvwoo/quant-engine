@@ -19,12 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qts_core.broker import Broker, Fill
-from qts_core.clock import to_et
 from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.models import MarketView
 from qts_core.money import CONTRACT_MULTIPLIER
 from qts_core.risk import (
-    ExitReason,
     Phase,
     PositionState,
     evaluate,
@@ -171,7 +169,9 @@ class PaperSession:
         self.store.journal_intent(intent, now)
         fill = self.broker.execute(intent, sel.quote.bid_cents, sel.quote.ask_cents, now)
         # For BUY legs fill_cost_cents stores the signed cash flow.
-        self.store.record_fill(coid, now, fill.premium_cents, fill.cost_cents, fill.commission_cents)
+        self.store.record_fill(
+            coid, now, fill.premium_cents, fill.cost_cents, fill.commission_cents
+        )
 
         pos = open_position(
             symbol=sel.quote.underlying,
@@ -236,17 +236,13 @@ class PaperSession:
         realized = self.store.realized_pnl_today(self.session_date)
         open_value = 0
         if pos is not None and pos.contracts > 0:
-            mark = next(
-                (q.mid_cents for q in view.chain if q.occ_symbol == pos.occ_symbol), None
-            )
+            mark = next((q.mid_cents for q in view.chain if q.occ_symbol == pos.occ_symbol), None)
             if mark is not None:
                 open_value = mark * CONTRACT_MULTIPLIER * pos.contracts
         cash = self.cfg.sub_portfolio_cents + realized
         if pos is not None and pos.contracts > 0:
             cash -= pos.cost_basis_per_contract_cents * pos.contracts
-        self.store.snapshot_equity(
-            view.now, self.session_date, cash, open_value, realized
-        )
+        self.store.snapshot_equity(view.now, self.session_date, cash, open_value, realized)
 
 
 def load_fixture_session(path: str | Path) -> list[MarketView]:

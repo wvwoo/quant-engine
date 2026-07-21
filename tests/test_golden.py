@@ -22,7 +22,6 @@ from qts_core.config import StrategyConfig
 from qts_core.paper import PaperSession
 from qts_core.report import render_session_report
 from qts_core.store import StateStore
-
 from tests.test_checklist import OPEN, SESSION, make_view
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
@@ -37,8 +36,11 @@ def _mark_view(mark_cents: int, hh: int, mm: int):  # type: ignore[no-untyped-de
     view = make_view(now)
     q = view.chain[0]
     return dc.replace(
-        view, chain=(dc.replace(q, bid_cents=mark_cents - 1, ask_cents=mark_cents + 1,
-                                received_at=now),) + view.chain[1:]
+        view,
+        chain=(
+            dc.replace(q, bid_cents=mark_cents - 1, ask_cents=mark_cents + 1, received_at=now),
+            *view.chain[1:],
+        ),
     )
 
 
@@ -66,11 +68,15 @@ def run_golden_session(db_path: Path) -> tuple[str, str]:
     report = render_session_report(store, CFG, SESSION)
     ledger = [
         {
-            "seq": o["seq"], "side": o["side"], "reason": o["reason"],
-            "contracts": o["contracts"], "limit_cents": o["limit_cents"],
+            "seq": o["seq"],
+            "side": o["side"],
+            "reason": o["reason"],
+            "contracts": o["contracts"],
+            "limit_cents": o["limit_cents"],
             "fill_premium_cents": o["fill_premium_cents"],
             "cash_or_realized_cents": o["fill_cost_cents"],
-            "status": o["status"], "client_order_id": o["client_order_id"],
+            "status": o["status"],
+            "client_order_id": o["client_order_id"],
         }
         for o in store.orders_for_session(SESSION)
     ]
@@ -80,7 +86,9 @@ def run_golden_session(db_path: Path) -> tuple[str, str]:
     ]
     payload = json.dumps(
         {"entry_quote_cents": entry_quote, "orders": ledger, "decisions": decisions},
-        indent=2, sort_keys=True, ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
     )
     store.close()
     return report, payload

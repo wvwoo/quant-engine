@@ -114,15 +114,25 @@ class TestAnalyzeContract:
 
     def test_hint_fallback_when_mid_unusable(self) -> None:
         a = analyze_contract(
-            mid_price=0.0001, spot=210.0, strike=205.0, t_years=T_0DTE, rate=R,
-            call=True, iv_hint=0.55,
+            mid_price=0.0001,
+            spot=210.0,
+            strike=205.0,
+            t_years=T_0DTE,
+            rate=R,
+            call=True,
+            iv_hint=0.55,
         )
         assert a.iv_source == "provider_hint"
         assert a.iv == 0.55
 
     def test_unavailable_when_no_source(self) -> None:
         a = analyze_contract(
-            mid_price=0.0001, spot=210.0, strike=205.0, t_years=T_0DTE, rate=R,
-            call=True, iv_hint=None,
+            mid_price=0.0001,
+            spot=210.0,
+            strike=205.0,
+            t_years=T_0DTE,
+            rate=R,
+            call=True,
+            iv_hint=None,
         )
         assert a == ContractAnalytics(mid=0.0001, iv=None, delta=None, iv_source="unavailable")

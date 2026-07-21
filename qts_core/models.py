@@ -103,10 +103,7 @@ class OptionQuote:
     def occ_symbol(self) -> str:
         """OCC option symbol, e.g. SPY260721C00628000."""
         strike_millis = self.strike_cents * 10  # cents -> 1/1000 dollar units
-        return (
-            f"{self.underlying.upper():s}{self.expiry:%y%m%d}"
-            f"{self.right}{strike_millis:08d}"
-        )
+        return f"{self.underlying.upper():s}{self.expiry:%y%m%d}{self.right}{strike_millis:08d}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,9 +124,7 @@ class MarketView:
         prev: dt.datetime | None = None
         for b in self.bars:
             if b.ts_close > self.now:
-                raise LookaheadError(
-                    f"bar closing {b.ts_close} is in the future of now={self.now}"
-                )
+                raise LookaheadError(f"bar closing {b.ts_close} is in the future of now={self.now}")
             if prev is not None and b.ts_close <= prev:
                 raise DataQualityError("session bars not strictly ascending")
             prev = b.ts_close

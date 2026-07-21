@@ -6,8 +6,6 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 
-import pytest
-
 from qts_core.clock import NY
 from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
@@ -64,8 +62,14 @@ def _prior_session(day: dt.date, *, volume: int = 1000) -> list[Bar]:
     while t <= close_t:
         step = steps[i % 4]
         bars.append(
-            Bar(ts_close=t, open=price, high=price + abs(step) + 0.2,
-                low=price - abs(step) - 0.2, close=price + step, volume=volume)
+            Bar(
+                ts_close=t,
+                open=price,
+                high=price + abs(step) + 0.2,
+                low=price - abs(step) - 0.2,
+                close=price + step,
+                volume=volume,
+            )
         )
         price += step
         t += dt.timedelta(minutes=5)
@@ -91,15 +95,27 @@ def _chain(now: dt.datetime, *, spot: float = 204.79) -> tuple[OptionQuote, ...]
     atm_mid = bs_price(spot, 205.0, t_years, CFG.risk_free_rate, 0.68)
     mid_c = round(atm_mid * 100)
     atm = OptionQuote(
-        underlying="NVDA", expiry=SESSION, strike_cents=20500, right="C",
-        bid_cents=mid_c - 1, ask_cents=mid_c + 2, volume=1200, open_interest=5000,
+        underlying="NVDA",
+        expiry=SESSION,
+        strike_cents=20500,
+        right="C",
+        bid_cents=mid_c - 1,
+        ask_cents=mid_c + 2,
+        volume=1200,
+        open_interest=5000,
         received_at=now,
     )
     otm_mid = bs_price(spot, 215.0, t_years, CFG.risk_free_rate, 0.68)
     otm = OptionQuote(
-        underlying="NVDA", expiry=SESSION, strike_cents=21500, right="C",
-        bid_cents=max(round(otm_mid * 100) - 1, 1), ask_cents=round(otm_mid * 100) + 2,
-        volume=300, open_interest=900, received_at=now,
+        underlying="NVDA",
+        expiry=SESSION,
+        strike_cents=21500,
+        right="C",
+        bid_cents=max(round(otm_mid * 100) - 1, 1),
+        ask_cents=round(otm_mid * 100) + 2,
+        volume=300,
+        open_interest=900,
+        received_at=now,
     )
     return (atm, otm)
 
@@ -189,7 +205,9 @@ class TestKnockouts:
     def test_wide_spread_rejected(self) -> None:
         now = et(10, 15)
         base = _chain(now)[0]
-        wide = dataclasses.replace(base, bid_cents=base.mid_cents - 40, ask_cents=base.mid_cents + 40)  # type: ignore[operator]
+        mid = base.mid_cents
+        assert mid is not None
+        wide = dataclasses.replace(base, bid_cents=mid - 40, ask_cents=mid + 40)
         d = evaluate_entry(make_view(chain=(wide,)), CFG, OPEN)
         assert not check(d, "contract_gates")
         assert any("spread" in r for r in d.veto_reasons)

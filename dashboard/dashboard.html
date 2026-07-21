@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QTS — لوحة التداول الورقي</title>
+<!--
+  Design language inherited from 1.html (the only mockup with a real data->DOM
+  layer and zero external origins). Every number on this page comes from
+  /api/* — nothing is hard-coded. Empty states borrowed from v3's vocabulary
+  («لا توجد نبضة»). Data lands via textContent only; no innerHTML sinks.
+-->
+<style>
+:root{
+  --bg:#070A12; --surface:#101626; --surface2:#0E1320; --line:rgba(255,255,255,.07);
+  --txt:#EAF0FB; --sub:#8B95AD; --muted:#5B6478;
+  --green:#22C55E; --greenS:#16331f; --red:#F0556B; --redS:#3a1620;
+  --amber:#F5A524; --amberS:#3a2a0c; --blue:#4C8DFF; --blueS:#13233f;
+  --cyan:#22D3EE; --purple:#A78BFA;
+  --radius:18px; --shadow:0 18px 40px -16px rgba(0,0,0,.7);
+  --font:'Segoe UI',system-ui,-apple-system,'Noto Sans Arabic',Tahoma,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);color:var(--txt);background:var(--bg);
+  background-image:radial-gradient(900px 500px at 90% -8%, rgba(76,141,255,.16), transparent 60%),
+                   radial-gradient(800px 500px at 5% 0%, rgba(167,139,250,.12), transparent 55%);
+  line-height:1.5;min-height:100vh;padding:24px 28px 48px}
+h1{font-size:21px;font-weight:800}
+.sub{color:var(--sub);font-size:12.5px}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 12px;border-radius:999px;border:1px solid}
+.pill.green{color:var(--green);background:var(--greenS);border-color:rgba(34,197,94,.35)}
+.pill.red{color:var(--red);background:var(--redS);border-color:rgba(240,85,107,.35)}
+.pill.amber{color:var(--amber);background:var(--amberS);border-color:rgba(245,165,36,.35)}
+.pill.blue{color:var(--blue);background:var(--blueS);border-color:rgba(76,141,255,.35)}
+.grid{display:grid;gap:14px}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:16px}
+.card{background:linear-gradient(160deg,var(--surface),var(--surface2));border:1px solid var(--line);
+  border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
+.card h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.kpi .cap{font-size:12px;color:var(--sub)}
+.kpi .val{font-size:22px;font-weight:800;margin-top:8px;font-feature-settings:'tnum'}
+.kpi .val.up{color:var(--green)} .kpi .val.down{color:var(--red)}
+.row-2{grid-template-columns:1.6fr 1fr;margin-bottom:16px}
+@media (max-width:900px){.row-2{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;
+  text-align:right;padding:8px 10px;border-bottom:1px solid var(--line)}
+tbody td{padding:8px 10px;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:none}
+.tier{font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px}
+.tier.SPEC{color:var(--green);background:var(--greenS)}
+.tier.DERIVED{color:var(--cyan);background:rgba(34,211,238,.12)}
+.tier.ASSUMPTION{color:var(--amber);background:var(--amberS)}
+.tier.SAFETY{color:var(--red);background:var(--redS)}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:13px}
+svg.eq{width:100%;height:120px;display:block}
+.note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7}
+.check-pass{color:var(--green);font-weight:700}
+.check-fail{color:var(--red);font-weight:700}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div>
+    <h1>QTS — لوحة التداول الورقي</h1>
+    <div class="sub">خيارات 0DTE · رأس مال فرعي <span id="capital">—</span> · كل الأرقام من الخادم</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <span class="pill blue" id="mode">…</span>
+    <span class="pill amber">LIVE_TRADING: OFF</span>
+    <span class="pill" id="conn">جارٍ الاتصال…</span>
+  </div>
+</div>
+
+<div class="grid kpis">
+  <div class="card kpi"><div class="cap">حقوق الملكية (paper)</div><div class="val" id="k-equity">—</div></div>
+  <div class="card kpi"><div class="cap">ربح/خسارة اليوم (مُحقَّق)</div><div class="val" id="k-pnl">—</div></div>
+  <div class="card kpi"><div class="cap">النقد</div><div class="val" id="k-cash">—</div></div>
+  <div class="card kpi"><div class="cap">قيمة المراكز المفتوحة (mark)</div><div class="val" id="k-open">—</div></div>
+  <div class="card kpi"><div class="cap">جلسة</div><div class="val" id="k-session" style="font-size:16px">—</div></div>
+</div>
+
+<div class="grid row-2">
+  <div class="card">
+    <h3>منحنى الحقوق <span class="sub" id="eq-count"></span></h3>
+    <svg class="eq" id="equity-svg" viewBox="0 0 760 120" preserveAspectRatio="none"></svg>
+    <div class="empty" id="eq-empty" hidden>لا توجد نبضة — لا لقطات حقوق لهذه الجلسة</div>
+  </div>
+  <div class="card">
+    <h3>آخر قرار — قائمة التحقّق</h3>
+    <table><tbody id="checklist"><tr><td class="empty">لا توجد قرارات بعد</td></tr></tbody></table>
+  </div>
+</div>
+
+<div class="grid row-2">
+  <div class="card">
+    <h3>سجلّ الأوامر <span class="pill amber" style="font-size:10px">MODELED fills</span></h3>
+    <table>
+      <thead><tr><th>#</th><th>جهة</th><th>سبب</th><th>عقود</th><th>حدّ</th><th>تنفيذ</th><th>حالة</th></tr></thead>
+      <tbody id="orders"><tr><td colspan="7" class="empty">لا أوامر لهذه الجلسة</td></tr></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>حالة النظام</h3>
+    <table><tbody id="system"><tr><td class="empty">…</td></tr></tbody></table>
+  </div>
+</div>
+
+<div class="card">
+  <h3>قواعد المخاطر النافذة <span class="sub">المصدرية ظاهرة لكل قاعدة — SPEC من التقرير، ASSUMPTION فجوة مواصفة، SAFETY أُضيفت لغياب خطر</span></h3>
+  <table>
+    <thead><tr><th>القاعدة</th><th>القيمة</th><th>المصدرية</th></tr></thead>
+    <tbody id="rules"></tbody>
+  </table>
+  <div class="note">أزرار التحكّم غير موجودة عمدًا: لوحة القراءة لا تدّعي تحكمًا خادميًّا لا تملكه
+  (استُبدل ادّعاء 1.html الكاذب «الأزرار تؤثّر فعليًّا» بهذه الجملة). تغيير القواعد = تعديل config + مراجعة + اختبارات.</div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const cents = c => (c < 0 ? "-" : "") + "$" + Math.trunc(Math.abs(c) / 100) + "." + String(Math.abs(c) % 100).padStart(2, "0");
+
+function setConn(ok, why) {
+  const el = $("conn");
+  el.textContent = ok ? "متصل ◉" : ("لا توجد نبضة — " + (why || "الخادم غير متاح"));
+  el.className = "pill " + (ok ? "green" : "red");
+}
+
+function drawEquity(points) {
+  const svg = $("equity-svg");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  if (!points || points.length < 2) { $("eq-empty").hidden = false; svg.style.display = "none"; return; }
+  $("eq-empty").hidden = true; svg.style.display = "block";
+  const vals = points.map(p => p.equity_cents);
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const pts = vals.map((v, i) => {
+    const x = (i / (vals.length - 1)) * 750 + 5;
+    const y = 110 - ((v - min) / span) * 100;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", pts);
+  line.setAttribute("fill", "none");
+  line.setAttribute("stroke", vals[vals.length-1] >= vals[0] ? "#22C55E" : "#F0556B");
+  line.setAttribute("stroke-width", "2.5");
+  line.setAttribute("stroke-linejoin", "round");
+  svg.appendChild(line);
+  $("eq-count").textContent = points.length + " لقطة";
+}
+
+function row(cells, header) {
+  const tr = document.createElement("tr");
+  for (const c of cells) {
+    const td = document.createElement(header ? "th" : "td");
+    if (c instanceof Node) td.appendChild(c); else td.textContent = c;
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+function badge(text, cls) {
+  const s = document.createElement("span");
+  s.className = cls; s.textContent = text; return s;
+}
+
+async function refresh() {
+  let ov;
+  try {
+    ov = await (await fetch("/api/overview")).json();
+  } catch (e) { setConn(false, "تعذّر الوصول للخادم"); return; }
+  if (!ov.connected) { setConn(false, ov.reason); return; }
+  setConn(true);
+  $("mode").textContent = ov.mode;
+  $("capital").textContent = cents(ov.sub_portfolio_cents);
+  $("k-equity").textContent = cents(ov.equity_cents);
+  $("k-cash").textContent = cents(ov.cash_cents);
+  $("k-open").textContent = cents(ov.open_value_cents);
+  $("k-session").textContent = ov.session_date;
+  const pnl = $("k-pnl");
+  pnl.textContent = cents(ov.realized_pnl_today_cents);
+  pnl.className = "val " + (ov.realized_pnl_today_cents > 0 ? "up" : ov.realized_pnl_today_cents < 0 ? "down" : "");
+  drawEquity(ov.equity_points);
+
+  const ex = await (await fetch("/api/execution")).json();
+  const ordersBody = $("orders");
+  while (ordersBody.firstChild) ordersBody.removeChild(ordersBody.firstChild);
+  if (!ex.orders || !ex.orders.length) {
+    const td = document.createElement("td"); td.colSpan = 7; td.className = "empty";
+    td.textContent = "لا أوامر لهذه الجلسة"; const tr = document.createElement("tr");
+    tr.appendChild(td); ordersBody.appendChild(tr);
+  } else {
+    for (const o of ex.orders)
+      ordersBody.appendChild(row([String(o.seq), o.side, o.reason, String(o.contracts),
+                                  o.limit, o.fill ?? "—", o.status]));
+  }
+  const decisions = ex.decisions || [];
+  const last = decisions[decisions.length - 1];
+  const cl = $("checklist");
+  while (cl.firstChild) cl.removeChild(cl.firstChild);
+  if (!last) {
+    const td = document.createElement("td"); td.className = "empty";
+    td.textContent = "لا توجد قرارات بعد"; const tr = document.createElement("tr");
+    tr.appendChild(td); cl.appendChild(tr);
+  } else {
+    for (const c of last.detail.checks) {
+      const mark = badge(c.passed ? "PASS ✓" : "FAIL ✗", c.passed ? "check-pass" : "check-fail");
+      cl.appendChild(row([c.name, c.value, mark]));
+    }
+  }
+
+  const sys = await (await fetch("/api/system")).json();
+  const sb = $("system");
+  while (sb.firstChild) sb.removeChild(sb.firstChild);
+  sb.appendChild(row(["الوضع", sys.mode]));
+  sb.appendChild(row(["live_trading", sys.live_trading]));
+  sb.appendChild(row(["قاعدة الحالة", sys.state_db.path + (sys.state_db.reachable ? " ✓" : " ✗")]));
+  for (const [k, v] of Object.entries(sys.modules)) sb.appendChild(row([k, v]));
+
+  const rr = await (await fetch("/api/risk/rules")).json();
+  const rb = $("rules");
+  while (rb.firstChild) rb.removeChild(rb.firstChild);
+  for (const r of rr.rules) {
+    const tr = row([r.id, r.value, badge(r.tier, "tier " + r.tier)]);
+    tr.title = r.citation;  // full provenance citation on hover
+    rb.appendChild(tr);
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

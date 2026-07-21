@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from qts_core.clock import NY
 from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
-from qts_core.money import BP, CONTRACT_MULTIPLIER, cents_from_quote
-from qts_core.pricing import bs_price, implied_vol
-from qts_core.risk import ExitReason, Phase, evaluate, open_position, size_entry
+from qts_core.money import BP, CONTRACT_MULTIPLIER
+from qts_core.pricing import bs_price
+from qts_core.risk import Phase, evaluate, open_position, size_entry
 from qts_core.signals.checklist import evaluate_entry
 
 
@@ -83,7 +83,7 @@ def _premium_cents(
     spot: float, strike: float, now: dt.datetime, session_date: dt.date, iv: float, rate: float
 ) -> int:
     p = bs_price(spot, strike, _t_years(now, session_date), rate, iv)
-    return max(int(round(p * 100)), 1)
+    return max(round(p * 100), 1)
 
 
 def _synthetic_chain(
@@ -92,8 +92,9 @@ def _synthetic_chain(
     """MODELED ATM call quote: BS mid at the stated IV, 3c-wide market (the
     report's own liquidity example)."""
     strike_cents = int(round(spot / 5.0) * 5) * 100  # nearest $5 strike
-    mid = _premium_cents(spot, strike_cents / 100.0, now, sess.session_date, sess.atm_iv,
-                         cfg.risk_free_rate)
+    mid = _premium_cents(
+        spot, strike_cents / 100.0, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
+    )
     return (
         OptionQuote(
             underlying=sess.symbol,
@@ -128,17 +129,18 @@ def run_session(
             # --- MODELED premium path, conservative order: low first ------
             strike = strike_cents / 100.0
             marks = (
-                _premium_cents(bar.low, strike, now, sess.session_date, sess.atm_iv,
-                               cfg.risk_free_rate),
-                _premium_cents(bar.high, strike, now, sess.session_date, sess.atm_iv,
-                               cfg.risk_free_rate),
-                _premium_cents(bar.close, strike, now, sess.session_date, sess.atm_iv,
-                               cfg.risk_free_rate),
+                _premium_cents(
+                    bar.low, strike, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
+                ),
+                _premium_cents(
+                    bar.high, strike, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
+                ),
+                _premium_cents(
+                    bar.close, strike, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
+                ),
             )
             for mark in marks:
-                position, orders = evaluate(
-                    position, mark, now, sess.force_flat_at, cfg, tick
-                )
+                position, orders = evaluate(position, mark, now, sess.force_flat_at, cfg, tick)
                 for o in orders:
                     pnl = (
                         o.trigger_premium_cents * CONTRACT_MULTIPLIER * o.contracts
@@ -154,12 +156,9 @@ def run_session(
                             occ_symbol=position.occ_symbol,
                             contracts=sum(c for _, c, _ in exits),
                             entry_quote_cents=position.entry_quote_cents,
-                            cost_basis_per_contract_cents=(
-                                position.cost_basis_per_contract_cents
-                            ),
+                            cost_basis_per_contract_cents=(position.cost_basis_per_contract_cents),
                             exits=tuple(exits),
-                            realized_pnl_cents=realized
-                            - sum(t.realized_pnl_cents for t in trades),
+                            realized_pnl_cents=realized - sum(t.realized_pnl_cents for t in trades),
                         )
                     )
                     position = None
@@ -195,8 +194,12 @@ def run_session(
         next_bar = sess.bars[i + 1]
         strike_cents = sel.quote.strike_cents
         fill_premium = _premium_cents(
-            next_bar.open, strike_cents / 100.0, next_bar.ts_close, sess.session_date,
-            sess.atm_iv, cfg.risk_free_rate,
+            next_bar.open,
+            strike_cents / 100.0,
+            next_bar.ts_close,
+            sess.session_date,
+            sess.atm_iv,
+            cfg.risk_free_rate,
         )
         slipped = -(-fill_premium * (BP + cfg.sizing_slippage_buffer_bp) // BP)
         position = open_position(
@@ -215,8 +218,12 @@ def run_session(
     if position is not None and sess.bars:
         last = sess.bars[-1]
         mark = _premium_cents(
-            last.close, strike_cents / 100.0, last.ts_close, sess.session_date,
-            sess.atm_iv, cfg.risk_free_rate,
+            last.close,
+            strike_cents / 100.0,
+            last.ts_close,
+            sess.session_date,
+            sess.atm_iv,
+            cfg.risk_free_rate,
         )
         pnl = (
             mark * CONTRACT_MULTIPLIER * position.contracts
@@ -290,10 +297,8 @@ def run_backtest(sessions: list[SessionData], cfg: StrategyConfig) -> BacktestRe
         assumptions={
             "options_premiums": "Black-Scholes from underlying bars at stated ATM IV "
             "(NOT real option prices — B2 open, ADR-007)",
-            "entry_fill": "next bar open +"
-            f"{cfg.sizing_slippage_buffer_bp}bp slippage, tick-legal",
-            "intrabar_path": "conservative: stop at bar low evaluated before target "
-            "at bar high",
+            "entry_fill": f"next bar open +{cfg.sizing_slippage_buffer_bp}bp slippage, tick-legal",
+            "intrabar_path": "conservative: stop at bar low evaluated before target at bar high",
             "commission": f"{cfg.commission_per_contract_cents}c/contract/side",
         },
         sessions=len(sessions),

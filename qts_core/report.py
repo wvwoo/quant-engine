@@ -28,9 +28,7 @@ def _banner(cfg: StrategyConfig) -> str:
     )
 
 
-def render_session_report(
-    store: StateStore, cfg: StrategyConfig, session_date: dt.date
-) -> str:
+def render_session_report(store: StateStore, cfg: StrategyConfig, session_date: dt.date) -> str:
     orders = store.orders_for_session(session_date)
     decisions = store.decisions_for_session(session_date)
     equity = store.equity_series(session_date)

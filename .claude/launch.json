@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "qts-api",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "qts_core.api:app", "--port", "8787"],
+      "port": 8787,
+      "env": { "QTS_DB": "qts_v8/state/paper.db", "QTS_SESSION_DATE": "2026-07-21" }
+    }
+  ]
+}

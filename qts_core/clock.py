@@ -43,7 +43,7 @@ def to_et(d: dt.datetime) -> dt.datetime:
 
 
 @lru_cache(maxsize=1)
-def xnys() -> "ExchangeCalendar":
+def xnys() -> ExchangeCalendar:
     """NYSE calendar, loaded once (bundled data — no network)."""
     import exchange_calendars as xcals
 
@@ -56,13 +56,13 @@ def is_trading_day(day: dt.date) -> bool:
 
 def session_close_et(day: dt.date) -> dt.datetime:
     """Actual close for a session (half-days close 13:00 ET, not 16:00)."""
-    close = xnys().session_close(day.isoformat())
-    return close.to_pydatetime().astimezone(NY)
+    close: dt.datetime = xnys().session_close(day.isoformat()).to_pydatetime()
+    return close.astimezone(NY)
 
 
 def session_open_et(day: dt.date) -> dt.datetime:
-    open_ = xnys().session_open(day.isoformat())
-    return open_.to_pydatetime().astimezone(NY)
+    open_: dt.datetime = xnys().session_open(day.isoformat()).to_pydatetime()
+    return open_.astimezone(NY)
 
 
 def in_time_window(now: dt.datetime, start: dt.time, end: dt.time) -> bool:
@@ -93,9 +93,9 @@ class TradingClock:
         self._now_fn = now_fn
 
     @classmethod
-    def system(cls) -> "TradingClock":
+    def system(cls) -> TradingClock:
         # The one sanctioned wall-clock read in the codebase.
-        return cls(lambda: dt.datetime.now(tz=UTC))  # noqa: DTZ005 - tz IS provided
+        return cls(lambda: dt.datetime.now(tz=UTC))
 
     def now_utc(self) -> dt.datetime:
         return require_aware(self._now_fn()).astimezone(UTC)

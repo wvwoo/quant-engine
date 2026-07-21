@@ -107,7 +107,11 @@ def size_entry(cfg: StrategyConfig, ask_cents: int) -> SizedOrder:
 
 
 def open_position(
-    *, symbol: str, occ_symbol: str, contracts: int, entry_quote_cents: int,
+    *,
+    symbol: str,
+    occ_symbol: str,
+    contracts: int,
+    entry_quote_cents: int,
     fill_cost_per_contract_cents: int,
 ) -> PositionState:
     if contracts <= 0:
@@ -173,7 +177,9 @@ def evaluate(
 
 
 def realized_pnl_cents(
-    state: PositionState, exit_premium_cents: int, contracts: int,
+    state: PositionState,
+    exit_premium_cents: int,
+    contracts: int,
     commission_per_contract_cents: int,
 ) -> int:
     """P&L for an exit leg off the ACTUAL basis (ADR-004), commissions included."""
