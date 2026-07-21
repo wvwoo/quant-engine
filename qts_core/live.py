@@ -18,12 +18,14 @@ reachable-only-sometimes (G-02). There is no live-order path in this codebase.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
 from qts_core.broker import PaperBroker
+from qts_core.broker_alpaca import AlpacaCredentialsMissing, AlpacaPaperBroker
 from qts_core.clock import (
     TradingClock,
     effective_force_flat_et,
@@ -35,7 +37,7 @@ from qts_core.money import TickSchedule
 from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
-from qts_core.store import StateStore
+from qts_core.store import BackendMismatchError, StateStore
 
 
 def _guarded[T](symbol: str, fn: Callable[..., T], *args: object) -> T | None:
@@ -55,10 +57,18 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated; defaults to the configured universe",
     )
     parser.add_argument("--db", default="qts_v8/state/paper.db")
+    parser.add_argument(
+        "--broker",
+        choices=["model", "alpaca_paper"],
+        default=None,
+        help="override cfg.broker_backend for this run (ADR-012)",
+    )
     parser.add_argument("--report", default=None, help="write session report to this path")
     args = parser.parse_args(argv)
 
     cfg = StrategyConfig()
+    if args.broker is not None:
+        cfg = dataclasses.replace(cfg, broker_backend=args.broker)
     require_paper_mode(cfg)  # BOOT gate: before the clock, the network, the db
     clock = TradingClock.system()
     now = clock.now_utc()
@@ -89,6 +99,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(args.db)
+    try:
+        # One db = one backend (ADR-012): modeled and venue fills must never
+        # blend into one ledger under one label.
+        store.assert_backend(cfg.broker_backend)
+    except BackendMismatchError as exc:
+        print(f"[halt] {exc}")
+        store.close()
+        return 2
+
+    alpaca = None
+    if cfg.broker_backend == "alpaca_paper":
+        try:
+            alpaca = AlpacaPaperBroker()
+            print(f"[broker] alpaca PAPER account {alpaca.verify_paper_account()} verified")
+        except AlpacaCredentialsMissing as exc:
+            print(f"[halt] {exc}")
+            store.close()
+            return 2
 
     # N-03: a position that expired without a closing order is invisible to
     # realized P&L (which sums SELL legs). The operator must SEE it, every
@@ -120,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             # only operation reachable from here.
             rescue = PaperSession(
                 store,
-                PaperBroker(cfg, TickSchedule.FULL_PENNY),  # placeholder; unused
+                alpaca if alpaca is not None else PaperBroker(cfg, TickSchedule.FULL_PENNY),
                 cfg,
                 session_date=session_date,
                 session_open_et=session_open_et(session_date),
@@ -140,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         # flattening, and the old loop `continue`d past step() in that case.
         session = PaperSession(
             store,
-            PaperBroker(cfg, tick),
+            alpaca if alpaca is not None else PaperBroker(cfg, tick),
             cfg,
             session_date=session_date,
             session_open_et=session_open_et(session_date),
@@ -196,8 +224,9 @@ def main(argv: list[str] | None = None) -> int:
                 mark = "PASS" if c.passed else "FAIL"
                 print(f"  {mark:4} {c.name:20} {c.value}  ({c.reason})")
         for fill in result.fills:
+            tag = "MODELED" if fill.modeled else "alpaca-paper"
             print(
-                f"[fill/MODELED] {symbol} {fill.client_order_id[:8]}… "
+                f"[fill/{tag}] {symbol} {fill.client_order_id[:8]}… "
                 f"premium={fill.premium_cents}c cash={fill.cost_cents}c"
             )
         if result.position is not None:

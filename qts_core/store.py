@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS equity (
     open_value_cents INTEGER NOT NULL,
     realized_pnl_today_cents INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
     session_date        TEXT PRIMARY KEY,
     realized_pnl_cents  INTEGER NOT NULL,
@@ -101,6 +105,15 @@ class SeqCollisionError(RuntimeError):
 
 class UnknownOrderError(RuntimeError):
     """A fill was recorded for an order that is not in the ledger."""
+
+
+class BackendMismatchError(RuntimeError):
+    """One database, one broker backend (ADR-012).
+
+    Modeled fills and Alpaca-paper fills are different KINDS of numbers; mixing
+    them in one ledger would make every aggregate (realized P&L, equity,
+    reports) a blend no honest label could describe. Switch backends with a
+    fresh --db."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +184,24 @@ class StateStore:
             raise
         finally:
             self._in_txn = False
+
+    # ---------------------------------------------------------- meta
+    def backend(self) -> str | None:
+        row = self._conn.execute("SELECT value FROM meta WHERE key='broker_backend'").fetchone()
+        return None if row is None else str(row[0])
+
+    def assert_backend(self, backend: str) -> None:
+        """First writer claims the db; every later open must match (ADR-012)."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('broker_backend', ?)",
+            (backend,),
+        )
+        current = self.backend()
+        if current != backend:
+            raise BackendMismatchError(
+                f"this database was written by broker_backend={current!r}; "
+                f"refusing to mix in {backend!r} fills — use a fresh --db"
+            )
 
     # ---------------------------------------------------------- orders
     def journal_intent(self, intent: OrderIntent, now: dt.datetime) -> bool:

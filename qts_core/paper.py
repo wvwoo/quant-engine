@@ -224,8 +224,9 @@ class PaperSession:
                     occ_symbol=occ,
                     contracts=contracts,
                     entry_quote_cents=int(row["limit_cents"]),
+                    # The ledger row carries the ACTUAL commission (F4).
                     fill_cost_per_contract_cents=premium * CONTRACT_MULTIPLIER
-                    + self.cfg.commission_per_contract_cents,
+                    + int(row["commission_cents"] or 0) // contracts,
                 )
                 continue
             if state is None:
@@ -329,8 +330,11 @@ class PaperSession:
             occ_symbol=sel.quote.occ_symbol,
             contracts=sized.contracts,
             entry_quote_cents=sel.quote.ask_cents,
+            # Commission from the FILL, not config — the entry-side twin of
+            # review F4: with a venue broker (ADR-012) the two can differ, and
+            # the basis must match the cash the ledger actually journals.
             fill_cost_per_contract_cents=fill.premium_cents * CONTRACT_MULTIPLIER
-            + self.cfg.commission_per_contract_cents,
+            + fill.commission_cents // sized.contracts,
         )
         # Fill + position in ONE transaction: a crash between them can no
         # longer leave a FILLED order without its position (QTS-2).
