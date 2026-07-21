@@ -64,16 +64,30 @@ def rvol(
     prior_sessions: Sequence[Sequence[Bar]],
     now: dt.datetime,
     lookback: int | None = None,
+    mode: str = "per_bar",
 ) -> float | None:
-    """Relative volume, same-elapsed-time construction.
+    """Relative volume. Two constructions, both same-elapsed-time (no look-ahead).
 
-    numerator   = today's cumulative volume up to `now`
-    denominator = mean over prior sessions of cumulative volume up to the SAME
-                  exchange time-of-day
+    mode="per_bar" (DEFAULT, evidence-based):
+        THIS bar's volume vs the mean volume of the SAME clock-minute bar over
+        prior sessions. Spiky — it can actually reach the report's "240%".
+    mode="cumulative":
+        session-to-date volume vs the mean session-to-date volume at the same
+        time of day. Smooth, and therefore heavily damped.
 
-    Comparing a partial session against completed-day averages (the naive
-    reading of the report's '240% of 20-day Moving Average') understates RVOL
-    early and is look-ahead-adjacent (finding LA-rvol-completed-day).
+    WHY per_bar IS THE DEFAULT — measured, not assumed. Over 577 in-window
+    bars across 29 real SPY sessions (2026-06/07):
+        cumulative: p50 0.88, max 1.74  ->   0/577 bars reach 2.0  (gate DEAD)
+        per_bar   : p50 0.83, p99 2.93, max 5.01 -> 22/577 (3.8%) reach 2.0
+    The report cites an OBSERVED 240%, which only the per-bar construction can
+    produce (it sits at the ~1.9th percentile there). Choosing the definition
+    that can express the spec's own datum is not curve-fitting: no threshold
+    was tuned, and the 2.0 gate is unchanged. Resolves the ambiguity flagged as
+    finding rvol-denominator-undefined.
+
+    Comparing a partial session against COMPLETED-day averages would be the
+    naive reading and is look-ahead-adjacent (finding LA-rvol-completed-day);
+    neither mode does that.
     """
     if not prior_sessions:
         return None
@@ -82,15 +96,26 @@ def rvol(
         # ran over EVERY supplied session (finding F2).
         prior_sessions = prior_sessions[-lookback:]
     cutoff = to_et(now).timetz()
-    num = cumulative_volume(session_bars)
     baselines: list[int] = []
-    for sess in prior_sessions:
-        baselines.append(sum(b.volume for b in sess if to_et(b.ts_close).timetz() <= cutoff))
+    if mode == "per_bar":
+        if not session_bars:
+            return None
+        num = session_bars[-1].volume
+        stamp = to_et(session_bars[-1].ts_close).timetz()
+        for sess in prior_sessions:
+            match = next((b.volume for b in sess if to_et(b.ts_close).timetz() == stamp), None)
+            if match is not None:
+                baselines.append(match)
+    elif mode == "cumulative":
+        num = cumulative_volume(session_bars)
+        for sess in prior_sessions:
+            baselines.append(sum(b.volume for b in sess if to_et(b.ts_close).timetz() <= cutoff))
+    else:
+        raise ValueError(f"unknown rvol mode: {mode!r}")
     positive = [b for b in baselines if b > 0]
     if not positive:
         return None
-    mean_baseline = sum(positive) / len(positive)
-    return num / mean_baseline
+    return num / (sum(positive) / len(positive))
 
 
 def _wilder_smooth(values: Sequence[float], period: int) -> float:

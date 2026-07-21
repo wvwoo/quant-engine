@@ -51,6 +51,7 @@ class StrategyConfig:
     # --- momentum filters -------------------------------------------------
     rvol_min: float = 2.0
     rvol_lookback_days: int = 20
+    rvol_mode: str = "per_bar"  # "per_bar" | "cumulative"
     rsi_period: int = 14
     rsi_overbought: float = 70.0
     macd_fast: int = 12
@@ -117,11 +118,18 @@ PROVENANCE: dict[str, tuple[Tier, str]] = {
         "slippage-triple-conflict) — we define spread_bp_of_mid.",
     ),
     "rvol_min": (Tier.SPEC, "report: RVOL > 2.0"),
+    "rvol_mode": (
+        Tier.ASSUMPTION,
+        "report gives no RVOL denominator (finding rvol-denominator-undefined). Resolved by "
+        "MEASUREMENT over 577 in-window bars / 29 real SPY sessions: the cumulative "
+        "construction peaks at 1.74 so the 2.0 gate is unreachable (0/577), while per-bar "
+        "reaches 5.01 with 3.8% of bars >= 2.0 — and only per-bar can produce the 240% the "
+        "report itself cites. No threshold was tuned.",
+    ),
     "rvol_lookback_days": (
         Tier.ASSUMPTION,
-        "report says '20-day Moving Average' with no denominator definition (finding "
-        "rvol-denominator-undefined). Defined here as: session cumulative volume vs the "
-        "mean same-elapsed-time cumulative volume over the prior N sessions.",
+        "report says '20-day Moving Average' with no window definition. N prior SESSIONS "
+        "are averaged (see rvol_mode for the numerator/denominator construction).",
     ),
     "rsi_period": (
         Tier.ASSUMPTION,

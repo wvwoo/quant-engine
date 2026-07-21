@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import os
 from typing import Any
 
+from qts_core.cache import DiskCache, RateLimiter
 from qts_core.clock import NY, to_et
 from qts_core.models import Bar, MarketView, OptionQuote
 from qts_core.money import MoneyError, cents_from_quote
@@ -121,23 +123,40 @@ def quotes_from_chain_rows(
     return sorted(typed[:max_strikes_around_atm], key=lambda q: q.strike_cents)
 
 
-class YFinanceSource:
-    """Live source. Network I/O lives here and ONLY here."""
+# One shared limiter per process: Yahoo throttles per client, not per symbol,
+# so a per-source limiter would let a 3-symbol run fire 3x the rate.
+_LIMITER = RateLimiter(float(os.environ.get("QTS_MIN_REQUEST_INTERVAL_S", "1.0")))
 
-    def __init__(self, symbol: str) -> None:
+
+class YFinanceSource:
+    """Live source. Network I/O lives here and ONLY here.
+
+    Every outbound call passes the shared rate limiter; expiration lists are
+    disk-cached per (symbol, session date) because the listed expiries do not
+    change intraday. Both were asked for in the mandate and were absent from
+    the legacy scanner (finding no-rate-limit-no-cache).
+    """
+
+    def __init__(self, symbol: str, cache: DiskCache | None = None) -> None:
         self.symbol = symbol.upper()
+        self.cache = cache if cache is not None else DiskCache()
 
     def _ticker(self):  # type: ignore[no-untyped-def]
         import yfinance as yf
 
+        _LIMITER.acquire()
         return yf.Ticker(self.symbol)
 
-    def expirations(self) -> list[dt.date]:
-        return [dt.date.fromisoformat(e) for e in self._ticker().options]
+    def expirations(self, session_date: dt.date | None = None) -> list[dt.date]:
+        if session_date is None:
+            return [dt.date.fromisoformat(e) for e in self._ticker().options]
+        key = f"expiries-{self.symbol}-{session_date.isoformat()}"
+        raw, _ = self.cache.get_or_fetch(key, lambda: list(self._ticker().options))
+        return [dt.date.fromisoformat(e) for e in raw]
 
     def has_same_day_expiry(self, session_date: dt.date) -> bool:
         """B4 gate: 0DTE availability is CHECKED, never assumed."""
-        return session_date in self.expirations()
+        return session_date in self.expirations(session_date)
 
     def fetch_bars(self, *, now: dt.datetime, days: int = 10, interval_min: int = 5) -> list[Bar]:
         hist = self._ticker().history(

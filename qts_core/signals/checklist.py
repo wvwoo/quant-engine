@@ -190,14 +190,14 @@ def evaluate_entry(
         )
     )
 
-    rv = ind.rvol(view.bars, view.prior_sessions, view.now, cfg.rvol_lookback_days)
+    rv = ind.rvol(view.bars, view.prior_sessions, view.now, cfg.rvol_lookback_days, cfg.rvol_mode)
     rvol_ok = rv is not None and rv >= cfg.rvol_min
     checks.append(
         CheckResult(
             "rvol",
             rvol_ok,
             _fmt(rv),
-            f">= {cfg.rvol_min:.1f} (same-elapsed-time, {cfg.rvol_lookback_days}d)",
+            f">= {cfg.rvol_min:.1f} ({cfg.rvol_mode}, {cfg.rvol_lookback_days}d)",
             "volume expansion confirmed"
             if rvol_ok
             else ("no prior-session baseline" if rv is None else "insufficient relative volume"),
