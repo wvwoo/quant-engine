@@ -161,6 +161,9 @@ def execution() -> JSONResponse:
     if store is None:
         return JSONResponse({"connected": False, "orders": []})
     try:
+        # The db's own meta says which broker wrote it (ADR-012); a hardcoded
+        # True here would have LIED the moment the venue bridge was enabled.
+        backend = store.backend() or "model"
         orders = [
             {
                 "seq": o["seq"],
@@ -172,7 +175,8 @@ def execution() -> JSONResponse:
                     fmt(o["fill_premium_cents"]) if o["fill_premium_cents"] is not None else None
                 ),
                 "status": o["status"],
-                "modeled": True,
+                "modeled": backend == "model",
+                "broker_backend": backend,
             }
             for o in store.orders_for_session(session)
         ]

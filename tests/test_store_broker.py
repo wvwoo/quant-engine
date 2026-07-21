@@ -291,3 +291,26 @@ class TestTransactionSurvivesItsOwnFailures:
         # and the outer rollback left the connection usable
         with store.transaction():
             store.journal_intent(intent(seq=2), NOW)
+
+
+class TestOneDbOneBackend:
+    """ADR-012: modeled fills and venue fills are different KINDS of numbers.
+    One ledger blending both would make every aggregate a mix no honest label
+    could describe. The first writer claims the db; later opens must match."""
+
+    def test_first_writer_claims_and_matching_reopen_passes(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        assert store.backend() is None, "an unclaimed db has no backend"
+        store.assert_backend("model")
+        assert store.backend() == "model"
+        store.close()
+        again = StateStore(tmp_path / "s.db")
+        again.assert_backend("model")  # must not raise
+
+    def test_mixing_backends_is_refused_with_the_fix_in_the_message(self, tmp_path: Path) -> None:
+        from qts_core.store import BackendMismatchError
+
+        store = StateStore(tmp_path / "s.db")
+        store.assert_backend("model")
+        with pytest.raises(BackendMismatchError, match="fresh --db"):
+            store.assert_backend("alpaca_paper")

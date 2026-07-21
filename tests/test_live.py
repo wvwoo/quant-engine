@@ -411,3 +411,41 @@ class TestConfigGapDoesNotStrandItsOwnPosition:
         live.main(["--db", str(db), "--symbols", "AAPL"])
         store = StateStore(db)
         assert [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"] == []
+
+
+class TestAlpacaBridgeWiring:
+    """ADR-012 wiring: the bridge is opt-in per run (--broker), fails closed
+    without keys, and the one-db-one-backend guard fires before any network."""
+
+    def test_missing_keys_halt_cleanly_before_any_network(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def exploding_source(symbol: str) -> FakeSource:  # pragma: no cover - never runs
+            raise AssertionError("provider reached without broker credentials")
+
+        _wire(monkeypatch, exploding_source)
+        monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+        monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"])
+        assert rc == 2
+        assert "PAPER account keys" in capsys.readouterr().out
+
+    def test_backend_mixing_is_refused_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        claimed = StateStore(db)
+        claimed.assert_backend("alpaca_paper")
+        claimed.close()
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        rc = live.main(["--db", str(db)])  # default backend: model
+        assert rc == 2
+        assert "fresh --db" in capsys.readouterr().out
+
+    def test_default_run_claims_the_db_as_model(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "p.db"
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        assert live.main(["--db", str(db), "--symbols", "NVDA"]) == 0
+        assert StateStore(db).backend() == "model"

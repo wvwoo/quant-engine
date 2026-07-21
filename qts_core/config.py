@@ -74,6 +74,7 @@ class StrategyConfig:
     max_bar_age_min: int = 25
     staleness_gate_enabled: bool = False
     backtest_artifacts: bool = False
+    broker_backend: str = "model"  # "model" | "alpaca_paper" (ADR-012)
 
     # --- provider / data shaping (were literals in the provider) ----------
     bars_fetch_days: int = 30
@@ -205,6 +206,15 @@ PROVENANCE: dict[str, tuple[Tier, str]] = {
     "live_trading": (
         Tier.SAFETY,
         "OFF. Real-money trading is an owner-exclusive act; see require_paper_mode().",
+    ),
+    "broker_backend": (
+        Tier.SAFETY,
+        '"model" = the in-process modeled PaperBroker (default). "alpaca_paper" = '
+        "real order infrastructure at Alpaca's PAPER venue (ADR-012): zero real money, "
+        "owner-held keys via APCA_API_KEY_ID/APCA_API_SECRET_KEY, base URL hardcoded to "
+        "paper-api.alpaca.markets and NOT configurable. One db = one backend, enforced "
+        "by StateStore.assert_backend. There is still no live-trading path in this "
+        "codebase; require_paper_mode is untouched.",
     ),
     "backtest_artifacts": (
         Tier.SAFETY,

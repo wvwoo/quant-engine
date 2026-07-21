@@ -30,7 +30,14 @@ def _et_hhmm(ts: str) -> str:
     return to_et(dt.datetime.fromisoformat(ts)).strftime("%H:%M")
 
 
-def _banner(cfg: StrategyConfig) -> str:
+def _banner(cfg: StrategyConfig, backend: str) -> str:
+    if backend == "alpaca_paper":
+        return (
+            "> **PAPER TRADING — ALPACA PAPER VENUE (ADR-012).** Orders were routed to\n"
+            "> Alpaca's paper simulator: real NBBO pricing, ZERO real money. Commissions\n"
+            "> are the venue's (none). Nothing here is investment advice or a promise\n"
+            "> of returns.\n"
+        )
     prov = PROVENANCE["commission_per_contract_cents"][0].value
     return (
         "> **PAPER TRADING — MODELED FILLS.** No real order was placed. Fills are\n"
@@ -51,7 +58,7 @@ def render_session_report(store: StateStore, cfg: StrategyConfig, session_date: 
     add = lines.append
     add("# 📊 QTS PAPER TRADING REPORT")
     add("")
-    add(_banner(cfg))
+    add(_banner(cfg, store.backend() or "model"))
     add("## 🌐 TELEMETRY & ROUTING METADATA")
     add(f"* **Session Date:** `{session_date.isoformat()}`")
     add("* **Engine:** `qts-core v0.1.0 / paper`")
