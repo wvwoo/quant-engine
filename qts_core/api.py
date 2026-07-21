@@ -80,10 +80,18 @@ def overview() -> JSONResponse:
                 "cash_cents": cash,
                 "open_value_cents": open_value,
                 "equity_cents": cash + open_value,
+                # On a day the engine never snapshotted, the numbers above are
+                # the CONFIGURED mandate, not a measurement. Saying so is the
+                # difference between a dashboard and a decoration (G-15).
+                "equity_measured": last is not None,
                 "realized_pnl_today_cents": realized,
                 "realized_pnl_today": fmt(realized),
                 "equity_points": [{"ts": ts, "equity_cents": c + ov} for ts, c, ov, _ in equity],
-                "open_positions": store.open_positions(),
+                # Expired rows are REPORTED separately, never mixed into live
+                # holdings: the session loop refuses to trade them, so the API
+                # must not present them as tradeable either (G-07).
+                "open_positions": store.open_positions(as_of=session),
+                "expired_positions": store.expired_positions(as_of=session),
             }
         )
     finally:

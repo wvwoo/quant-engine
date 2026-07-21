@@ -109,6 +109,23 @@ class OptionQuote:
         return f"{self.underlying.upper():s}{self.expiry:%y%m%d}{self.right}{strike_millis:08d}"
 
 
+def expiry_from_occ(occ: str) -> dt.date | None:
+    """Parse the YYMMDD block out of an OCC symbol (root + 6 date + R + 8).
+
+    Lives here rather than in the session loop because BOTH the loop and the
+    store need it: the loop quarantines expired 0DTE rows from trading, and the
+    API must not report them as open (G-07). One parser, one truth.
+    """
+    if len(occ) < 15:
+        return None
+    body = occ[:-9]  # strip right + 8-digit strike
+    ymd = body[-6:]
+    try:
+        return dt.date(2000 + int(ymd[:2]), int(ymd[2:4]), int(ymd[4:6]))
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class MarketView:
     """Frozen, validated snapshot handed to the strategy. Nothing newer than

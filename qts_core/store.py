@@ -26,6 +26,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from qts_core.models import expiry_from_occ
+
 _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "qts-core.local")
 
 _SCHEMA = """
@@ -255,12 +257,38 @@ class StateStore:
         ).fetchone()
         return None if row is None else json.loads(row[0])
 
-    def open_positions(self) -> dict[str, dict[str, object]]:
+    def open_positions(self, as_of: dt.date | None = None) -> dict[str, dict[str, object]]:
+        """Non-CLOSED position rows.
+
+        ``as_of`` excludes rows whose 0DTE expiry has already passed. Without
+        it the result is every non-closed row ever written, from every past
+        session — which the API reported as live holdings, contradicting the
+        quarantine the session loop documents and enforces (G-07).
+        """
         rows = self._conn.execute("SELECT occ_symbol, state_json FROM positions").fetchall()
         out: dict[str, dict[str, object]] = {}
         for occ, blob in rows:
             state = json.loads(blob)
-            if state.get("phase") != "CLOSED":
+            if state.get("phase") == "CLOSED":
+                continue
+            if as_of is not None:
+                expiry = expiry_from_occ(occ)
+                if expiry is not None and expiry < as_of:
+                    continue
+            out[occ] = state
+        return out
+
+    def expired_positions(self, as_of: dt.date) -> dict[str, dict[str, object]]:
+        """Non-CLOSED rows whose expiry has passed — REPORTED, never silently
+        settled: we do not own the data to price an assignment."""
+        rows = self._conn.execute("SELECT occ_symbol, state_json FROM positions").fetchall()
+        out: dict[str, dict[str, object]] = {}
+        for occ, blob in rows:
+            state = json.loads(blob)
+            if state.get("phase") == "CLOSED":
+                continue
+            expiry = expiry_from_occ(occ)
+            if expiry is not None and expiry < as_of:
                 out[occ] = state
         return out
 

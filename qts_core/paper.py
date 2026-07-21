@@ -72,18 +72,6 @@ def _pos_from_json(d: dict[str, object]) -> PositionState:
     )
 
 
-def _expiry_from_occ(occ: str) -> dt.date | None:
-    """Parse the YYMMDD block out of an OCC symbol (root + 6 date + R + 8)."""
-    if len(occ) < 15:
-        return None
-    body = occ[:-9]  # strip right + 8-digit strike
-    ymd = body[-6:]
-    try:
-        return dt.date(2000 + int(ymd[:2]), int(ymd[2:4]), int(ymd[4:6]))
-    except ValueError:
-        return None
-
-
 def _decision_blob(d: EntryDecision) -> str:
     return json.dumps(
         {
@@ -135,34 +123,22 @@ class PaperSession:
         self.reconcile()
 
     # ------------------------------------------------------------ recovery
-    def recover_position(self, occ_symbol: str) -> PositionState | None:
-        blob = self.store.load_position(occ_symbol)
-        return None if blob is None else _pos_from_json(blob)
-
     def any_open_position(self) -> PositionState | None:
         """Open position for THIS session only.
 
         A 0DTE contract from an earlier session has expired; carrying it
         forward as tradeable would mark a worthless (or assigned) contract as
-        live forever (finding QTS-2). Stale rows are quarantined instead.
+        live forever (finding QTS-2). Stale rows are quarantined instead —
+        the quarantine now lives in the store so every reader shares it (G-07).
         """
-        for occ, blob in self.store.open_positions().items():
-            if not occ.startswith("__"):
-                expiry = _expiry_from_occ(occ)
-                if expiry is not None and expiry < self.session_date:
-                    continue
+        for blob in self.store.open_positions(as_of=self.session_date).values():
             return _pos_from_json(blob)
         return None
 
     def expired_positions(self) -> list[str]:
         """Open rows whose 0DTE expiry has already passed — reported, never
         silently settled: we do not own the data to price an assignment."""
-        out = []
-        for occ in self.store.open_positions():
-            expiry = _expiry_from_occ(occ)
-            if expiry is not None and expiry < self.session_date:
-                out.append(occ)
-        return sorted(out)
+        return sorted(self.store.expired_positions(as_of=self.session_date))
 
     # ------------------------------------------------------------ reconciliation
     def reconcile(self, now: dt.datetime | None = None) -> None:
