@@ -31,12 +31,22 @@ from qts_core.clock import is_trading_day, session_close_et, session_open_et
 ny = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
 d = ny.date()
 mode = sys.argv[1] if len(sys.argv) > 1 else "in_session"
+if mode == "seconds_to_open":
+    # Seconds until the NEXT session open (0 if a session is open right now).
+    # Launched Tuesday evening, this waits ~16h for the Wednesday bell instead
+    # of computing the morning that already happened and exiting instantly.
+    if is_trading_day(d) and ny < session_close_et(d):
+        print(max(0, int((session_open_et(d) - ny).total_seconds())))
+        sys.exit(0)
+    probe = d + dt.timedelta(days=1)
+    for _ in range(15):
+        if is_trading_day(probe):
+            print(int((session_open_et(probe) - ny).total_seconds()))
+            sys.exit(0)
+        probe += dt.timedelta(days=1)
+    sys.exit(4)  # no session within 15 days: calendar is broken, say so
 if not is_trading_day(d):
     sys.exit(3)
-if mode == "seconds_to_open":
-    delta = (session_open_et(d) - ny).total_seconds()
-    print(max(0, int(delta)))
-    sys.exit(0)
 sys.exit(0 if ny < session_close_et(d) else 3)
 '
 

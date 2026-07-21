@@ -69,3 +69,26 @@ class TestGateExitContract:
         assert r.returncode == 130
         assert "interrupted — stopping" in r.stdout
         assert "continuing" not in r.stdout
+
+
+class TestSecondsToOpen:
+    """WAIT_FOR_OPEN computed TODAY's open only: launched Tuesday evening it
+    printed 0 (the bell already rang), the loop started, the in-session gate
+    said 'outside' and the overnight launch exited within a second — silently
+    defeating the whole point. It now finds the NEXT session's open."""
+
+    def test_prints_a_nonnegative_integer_whenever_invoked(self, tmp_path: Path) -> None:
+        # Extract the embedded gate verbatim from the script — testing a copy
+        # would let the two drift.
+        text = SCRIPT.read_text()
+        gate = text.split("GATE='")[1].split("\n'\n")[0]
+        r = subprocess.run(
+            [str(REPO / ".venv/bin/python"), "-c", gate, "seconds_to_open"],
+            capture_output=True, text=True, timeout=60, cwd=REPO,
+        )
+        assert r.returncode == 0, r.stderr
+        secs = int(r.stdout.strip())
+        assert secs >= 0
+        # Never more than ~15 days: beyond that the gate must fail (exit 4),
+        # because a calendar that can't find a session in two weeks is broken.
+        assert secs <= 15 * 24 * 3600
