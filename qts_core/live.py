@@ -92,13 +92,22 @@ def main(argv: list[str] | None = None) -> int:
 
     for symbol in symbols:
         print(f"--- {symbol} ---")
+        # tick_schedule_for fails loud on unknown symbols (N-08) — but a
+        # config gap on ONE symbol must cost that symbol, never the pass
+        # (N-06): the next symbol may be holding a position that needs its
+        # exits managed.
+        try:
+            tick = cfg.tick_schedule_for(symbol)
+        except KeyError as exc:
+            print(f"[error] {symbol}: {exc.args[0]}")
+            continue
         # The session is built BEFORE the provider is consulted, because the
         # safety rail must not depend on the data feed (N-02): a throttled or
         # unavailable provider is exactly when an open position most needs
         # flattening, and the old loop `continue`d past step() in that case.
         session = PaperSession(
             store,
-            PaperBroker(cfg, cfg.tick_schedule_for(symbol)),
+            PaperBroker(cfg, tick),
             cfg,
             session_date=session_date,
             session_open_et=session_open_et(session_date),

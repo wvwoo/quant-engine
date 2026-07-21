@@ -275,3 +275,22 @@ class TestArtifactDirIsCwdIndependent:
         found = latest_payload()
         assert found is not None, "a saved artifact was reported as missing"
         assert found["symbol"] == "SPY"
+
+
+class TestUnknownSymbolFailsBeforeTheNetwork:
+    """N-08 containment for the CLI: an unconfigured symbol must produce the
+    actionable message BEFORE any bars are fetched — not a KeyError traceback
+    after a month of history was downloaded for nothing."""
+
+    def test_clean_halt_with_the_fix_in_the_message(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def exploding(symbol: str) -> FakeSource:  # pragma: no cover - never runs
+            raise AssertionError("the provider was reached for an unconfigured symbol")
+
+        monkeypatch.setattr(rb, "YFinanceSource", exploding)
+        rc = rb.main(["--symbol", "AAPL", "--days", "5"])
+        assert rc == 2
+        out = capsys.readouterr().out
+        assert "tick_schedules" in out
+        assert "AAPL" in out

@@ -280,3 +280,22 @@ class TestStepFailureIsContained:
         assert "NVDA" in seen, "a step failure on QQQ skipped every later symbol"
         assert "[error] QQQ" in capsys.readouterr().out
         assert report.exists(), "the report must still be written after a contained failure"
+
+
+class TestUnknownSymbolIsContained:
+    """The N-08 fail-loud KeyError must obey the N-06 containment rule: one
+    unconfigured symbol costs THAT symbol, never the pass. Without this,
+    --symbols AAPL,SPY died on AAPL before SPY ever ran — and an open SPY
+    position went unmanaged, which is the exact hazard N-02 closed."""
+
+    def test_unknown_symbol_skips_but_the_rest_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--symbols", "AAPL,NVDA"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[error] AAPL" in out
+        assert "tick schedule" in out
+        assert "--- NVDA ---" in out, "an unconfigured symbol killed the whole pass"
+        assert "[decision] NVDA" in out
