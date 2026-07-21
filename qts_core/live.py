@@ -127,6 +127,13 @@ def main(argv: list[str] | None = None) -> int:
         if result is None:
             continue
 
+        if result.data_age_min is not None:
+            flag = "" if result.data_age_min <= cfg.max_bar_age_min else "  <-- OVER LIMIT"
+            gate = "on" if cfg.staleness_gate_enabled else "off"
+            print(
+                f"[data] {symbol} newest bar {result.data_age_min:.1f} min old "
+                f"(limit {cfg.max_bar_age_min}m, gate {gate}){flag}"
+            )
         if result.halted:
             print(f"[halt] {symbol}: {result.halted}")
         if result.decision is not None:

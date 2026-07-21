@@ -302,6 +302,17 @@ def run_backtest(sessions: list[SessionData], cfg: StrategyConfig) -> BacktestRe
         if all_trades:
             notes.append("profit_factor undefined: zero losing trades in sample")
 
+    # END_OF_DATA means a trade was closed because the bars ran out, not
+    # because the strategy exited. The code said "and say so" while nothing
+    # ever surfaced it (N-05): it never reached notes, and the CLI prints
+    # notes but never TradeRecord.exits.
+    eod = sum(1 for t in all_trades for reason, _, _ in t.exits if reason == "END_OF_DATA")
+    if eod:
+        notes.append(
+            f"{eod} trade(s) closed at END_OF_DATA (bars ran out before an exit "
+            "triggered) — these are data-boundary closes, not strategy exits"
+        )
+
     sharpe: float | None = None
     if len(session_pnls) >= 30:
         mean = sum(session_pnls) / len(session_pnls)

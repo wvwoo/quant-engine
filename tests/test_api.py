@@ -163,3 +163,52 @@ class TestDashboardAndSystem:
         assert body["mode"] == "PAPER"
         assert body["state_db"]["reachable"] is True
         assert "PaperBroker" in body["modules"]["broker"]
+
+
+class TestBacktestEndpoint:
+    """G-12: a backtest existed only on stdout. Serving it is useful; serving
+    it without its caveats would be worse than not serving it at all."""
+
+    def test_absence_is_explicit(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        body = client.get("/api/backtest").json()
+        assert body["available"] is False
+        assert "run" in body["reason"], "an empty result must say how to produce one"
+
+    def test_saved_result_is_served_with_its_tag(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from qts_core.artifacts import DEFAULT_DIR, write_artifacts
+        from qts_core.backtest import BacktestResult
+
+        monkeypatch.chdir(tmp_path)
+        res = BacktestResult(
+            modeled=True,
+            assumptions={"options_premiums": "Black-Scholes (B2 open)"},
+            sessions=20,
+            signal_count=0,
+            trades=(),
+            net_pnl_cents=0,
+            win_rate=None,
+            profit_factor=None,
+            max_drawdown_cents=0,
+            sharpe=None,
+            notes=("sharpe not reported: 20 sessions < 30 minimum",),
+        )
+        write_artifacts(
+            res,
+            symbol="SPY",
+            days=30,
+            atm_iv=0.20,
+            generated_at=dt.datetime(2026, 6, 17, 16, 0, tzinfo=NY),
+            directory=tmp_path / DEFAULT_DIR,
+        )
+        body = client.get("/api/backtest").json()
+        assert body["available"] is True
+        assert body["modeled"] is True
+        assert "MODELED" in body["modeled_note"]
+        assert "B2" in body["barrier_open"]
+        assert body["results"]["signal_count"] == 0
+        assert "net_pnl_cents_MODELED" in body["results"]

@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
+from qts_core.artifacts import latest_payload
 from qts_core.clock import TradingClock
 from qts_core.config import PROVENANCE, StrategyConfig, require_paper_mode
 from qts_core.money import fmt
@@ -167,6 +168,28 @@ def execution() -> JSONResponse:
         return JSONResponse({"connected": True, "orders": orders, "decisions": decisions})
     finally:
         store.close()
+
+
+@app.get("/api/backtest")
+def backtest() -> JSONResponse:
+    """Latest SAVED backtest, or an explicit absence.
+
+    Serving nothing is the honest answer when nothing has been run; the
+    endpoint never synthesises or estimates. Every figure it does serve arrives
+    already tagged MODELED by the artifact writer (ADR-003/007).
+    """
+    payload = latest_payload()
+    if payload is None:
+        return JSONResponse(
+            {
+                "available": False,
+                "reason": (
+                    "no saved backtest. Enable StrategyConfig.backtest_artifacts and run "
+                    "python -m qts_core.run_backtest"
+                ),
+            }
+        )
+    return JSONResponse({"available": True, **payload})
 
 
 @app.get("/api/system")

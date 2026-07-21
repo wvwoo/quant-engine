@@ -44,6 +44,9 @@ class StepResult:
     fills: tuple[Fill, ...]
     position: PositionState | None
     halted: str | None  # non-None => session halted (reason)
+    # Age of the newest bar at decision time. Reported even when the staleness
+    # gate is OFF, so the threshold can be picked from measurement (G-14).
+    data_age_min: float | None = None
 
 
 def _pos_to_json(p: PositionState) -> dict[str, object]:
@@ -70,6 +73,18 @@ def _pos_from_json(d: dict[str, object]) -> PositionState:
         peak_premium_cents=int(d["peak_premium_cents"]),  # type: ignore[call-overload]
         realized_pnl_cents=int(d["realized_pnl_cents"]),  # type: ignore[call-overload]
     )
+
+
+def _bar_age_min(view: MarketView) -> float | None:
+    """Minutes between the newest bar's CLOSE and the view's now.
+
+    This is the only honest staleness signal available. OptionQuote.received_at
+    records when WE fetched, not how old the exchange data is, so any gate
+    built on it would measure our own latency and call it market freshness.
+    """
+    if not view.bars:
+        return None
+    return (view.now - view.bars[-1].ts_close).total_seconds() / 60.0
 
 
 def _decision_blob(d: EntryDecision) -> str:
@@ -251,13 +266,32 @@ class PaperSession:
             self._snapshot_portfolio(now, view.chain)
             return StepResult(None, (), None, halted="AFTER_FORCE_FLAT")
 
+        # Data-age gate (G-14). ENTRIES ONLY — it sits after the exit path on
+        # purpose: refusing to act on stale data must never strand an open
+        # position, which would recreate the very hazard the force-flat rail
+        # exists to prevent.
+        age_min = _bar_age_min(view)
+        if (
+            self.cfg.staleness_gate_enabled
+            and age_min is not None
+            and age_min > self.cfg.max_bar_age_min
+        ):
+            self._snapshot_portfolio(now, view.chain)
+            return StepResult(
+                None,
+                (),
+                None,
+                halted=f"STALE_DATA:{age_min:.1f}m>{self.cfg.max_bar_age_min}m",
+                data_age_min=age_min,
+            )
+
         decision = evaluate_entry(view, self.cfg, self.session_open_et)
         self.store.log_decision(
             now, self.session_date, decision.symbol, decision.approved, _decision_blob(decision)
         )
         if not decision.approved or decision.selection is None:
             self._snapshot_portfolio(now, view.chain)
-            return StepResult(decision, (), None, None)
+            return StepResult(decision, (), None, None, data_age_min=age_min)
 
         sel = decision.selection
         # QTS-4: size against what the day still has, not a constant mandate.
@@ -270,7 +304,7 @@ class PaperSession:
         )
         if sized.contracts == 0:
             self._snapshot_portfolio(now, view.chain)
-            return StepResult(decision, (), None, None)
+            return StepResult(decision, (), None, None, data_age_min=age_min)
 
         seq = self.store.next_seq(self.session_date)
         coid = client_order_id(STRATEGY_ID, self.session_date, sel.quote.occ_symbol, "BUY", seq)
@@ -305,7 +339,7 @@ class PaperSession:
             )
             self.store.save_position(pos.occ_symbol, _pos_to_json(pos), now)
         self._snapshot(view.now, view.chain, pos)
-        return StepResult(decision, (fill,), pos, None)
+        return StepResult(decision, (fill,), pos, None, data_age_min=age_min)
 
     def _manage_exits(self, pos: PositionState, view: MarketView) -> StepResult:
         now = view.now

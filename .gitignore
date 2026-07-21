@@ -38,3 +38,4 @@ Algorithmic Options Trade Explained - Google Gemini_files/
 # --- match a subdirectory — gitignore's * never crosses a '/') ---
 qts_v8/state/cache/
 *.tmp
+qts_v8/state/backtests/

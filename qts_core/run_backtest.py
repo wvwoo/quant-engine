@@ -18,6 +18,7 @@ import dataclasses
 import datetime as dt
 import sys
 
+from qts_core.artifacts import write_artifacts
 from qts_core.backtest import SessionData, run_backtest
 from qts_core.clock import (
     TradingClock,
@@ -44,6 +45,24 @@ def build_sessions(
         by_day.setdefault(to_et(b.ts_close).date(), []).append(b)
 
     ordered = sorted(d for d in by_day if is_trading_day(d))
+    # An IN-PROGRESS session must not be scored (N-05). Running at 10:45 used
+    # to append today as a full SessionData, so an approved entry was closed at
+    # the last available bar and recorded as a completed trade under the
+    # END_OF_DATA reason — which nothing printed. A session counts only once
+    # its bars reach the force-flat instant, i.e. once the strategy's own day
+    # is over. This needs no notion of "today" and so cannot drift.
+    complete: list[dt.date] = []
+    for day in ordered:
+        flat_at = effective_force_flat_et(
+            day, cfg.force_flat_et, dt.timedelta(minutes=cfg.force_flat_close_buffer_min)
+        )
+        if by_day[day] and by_day[day][-1].ts_close >= flat_at:
+            complete.append(day)
+    dropped = [d for d in ordered if d not in complete]
+    if dropped:
+        print(f"[note] excluded {len(dropped)} incomplete session(s): {dropped[-1]} (in progress)")
+    ordered = complete
+
     sessions: list[SessionData] = []
     for i, day in enumerate(ordered):
         priors = tuple(tuple(by_day[d]) for d in ordered[:i][-cfg.rvol_lookback_days :])
@@ -189,6 +208,13 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 72)
     print("These are MODELED results on synthetic option premiums, not a record")
     print("of trades and not a forecast. Real option prices will differ.")
+
+    if cfg.backtest_artifacts:
+        json_path, md_path = write_artifacts(
+            res, symbol=args.symbol, days=args.days, atm_iv=args.atm_iv, generated_at=now
+        )
+        print(f"[artifacts] {json_path}")
+        print(f"[artifacts] {md_path}")
     return 0
 
 

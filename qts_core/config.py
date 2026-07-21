@@ -71,6 +71,9 @@ class StrategyConfig:
     force_flat_close_buffer_min: int = 30
     daily_loss_limit_cents: int = 21_250  # 25% of sub-portfolio
     live_trading: bool = False
+    max_bar_age_min: int = 25
+    staleness_gate_enabled: bool = False
+    backtest_artifacts: bool = False
 
     # --- provider / data shaping (were literals in the provider) ----------
     bars_fetch_days: int = 30
@@ -187,6 +190,28 @@ PROVENANCE: dict[str, tuple[Tier, str]] = {
     "live_trading": (
         Tier.SAFETY,
         "OFF. Real-money trading is an owner-exclusive act; see require_paper_mode().",
+    ),
+    "backtest_artifacts": (
+        Tier.SAFETY,
+        "OFF. A stdout backtest dies with the terminal; a FILE outlives its caveats — it "
+        "can be forwarded or quoted back as if it were a track record. When enabled, every "
+        "artifact carries the MODELED tag and the open-B2 note in the header, per field, "
+        "and in the JSON body.",
+    ),
+    "max_bar_age_min": (
+        Tier.SAFETY,
+        "ABSENT from spec. Maximum age of the NEWEST bar before an ENTRY is refused. "
+        "25 min = the free tier's documented ~15 min delay + one 5 min bar + operating "
+        "headroom, so a normal delayed feed passes and a FROZEN one does not. Measured "
+        "against bar ts_close, never OptionQuote.received_at — received_at is the fetch "
+        "stamp, so a gate built on it would look like a guard and measure nothing. "
+        "ENTRIES only: refusing to act on stale data must never strand an open position.",
+    ),
+    "staleness_gate_enabled": (
+        Tier.SAFETY,
+        "OFF until the age distribution has been measured on a real session. While OFF "
+        "the age is still computed and reported (StepResult.data_age_min) so the "
+        "threshold can be chosen from data rather than guessed.",
     ),
     "bars_fetch_days": (
         Tier.ASSUMPTION,

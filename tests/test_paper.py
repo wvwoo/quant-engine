@@ -4,6 +4,7 @@ kill-9 resume contract, and the safety halts."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 from pathlib import Path
 
@@ -523,3 +524,64 @@ class TestEquityIsAlwaysMeasured:
         assert after_other[1] == after_holder[1], (
             "a non-holding symbol overwrote the portfolio cash with its own view"
         )
+
+
+class TestDataStalenessGate:
+    """G-14: the engine decided and 'executed' on ~15-minute-delayed data with
+    no age check at all. MarketView's firewall bounds the FUTURE (no bar may
+    close after now) but never the past.
+
+    The honest signal is the newest BAR's close time. OptionQuote.received_at
+    is the FETCH stamp — it says when we asked, not how old the market data
+    is — so a gate built on it would look like a guard and measure nothing.
+    """
+
+    def _aged_view(self, age_min: int):  # type: ignore[no-untyped-def]
+        """A view whose newest bar closed `age_min` minutes before now."""
+        import dataclasses as dc
+
+        base = make_view(et(10, 15))
+        newest = base.bars[-1].ts_close
+        return dc.replace(base, now=newest + dt.timedelta(minutes=age_min))
+
+    def test_fresh_data_is_evaluated(self, tmp_path: Path) -> None:
+        cfg = dataclasses.replace(CFG, staleness_gate_enabled=True)
+        s = make_session(tmp_path / "s.db", cfg)
+        r = s.step(self._aged_view(10))
+        assert r.halted != "STALE_DATA"
+        assert r.decision is not None
+
+    def test_stale_data_is_refused_with_a_reason(self, tmp_path: Path) -> None:
+        cfg = dataclasses.replace(CFG, staleness_gate_enabled=True)
+        s = make_session(tmp_path / "s.db", cfg)
+        r = s.step(self._aged_view(40))
+        assert r.halted is not None and r.halted.startswith("STALE_DATA")
+        assert r.decision is None
+        assert s.store.orders_for_session(SESSION) == [], "no order on stale data"
+
+    def test_age_is_measured_even_when_the_gate_is_off(self, tmp_path: Path) -> None:
+        """OFF must still MEASURE: the threshold should be chosen from the
+        observed distribution, not guessed."""
+        s = make_session(tmp_path / "s.db")  # default cfg: gate disabled
+        r = s.step(self._aged_view(40))
+        assert r.halted != "STALE_DATA", "the flag defaults OFF"
+        assert r.data_age_min is not None
+        assert 39 <= r.data_age_min <= 41
+
+    def test_stale_data_never_blocks_an_exit(self, tmp_path: Path) -> None:
+        """A rail that refuses to act on stale data would strand a position at
+        exactly the moment the feed degrades. Entries are gated; exits are not."""
+        import dataclasses as dc
+
+        cfg = dataclasses.replace(CFG, staleness_gate_enabled=True)
+        s = make_session(tmp_path / "s.db", cfg)
+        entered = s.step(make_view())
+        assert entered.position is not None
+        stop = entered.position.stop_level(cfg)
+
+        view = TestExitFlow()._view_with_mark(stop - 2, et(10, 30))
+        aged = dc.replace(view, now=view.bars[-1].ts_close + dt.timedelta(minutes=45))
+        r = s.step(aged)
+        assert r.position is not None and r.position.phase is Phase.CLOSED
+        sells = [o for o in s.store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert sells and sells[0]["reason"] == "STOP"
