@@ -51,14 +51,25 @@ sys.exit(0 if ny < session_close_et(d) else 3)
 '
 
 if [ "${WAIT_FOR_OPEN:-0}" = "1" ]; then
-    SECS=$("$PY" -c "$GATE" seconds_to_open) || {
-        echo "[loop] open-time check FAILED (exit $?) — aborting, not guessing" >&2
-        exit 70
-    }
-    if [ "$SECS" -gt 0 ]; then
-        echo "[loop] waiting ${SECS}s until the XNYS open…"
-        sleep "$SECS"
-    fi
+    # Re-check every <=5 min instead of one monolithic sleep: a single
+    # 16-hour sleep(57000) is suspended during SYSTEM sleep and resumes
+    # where it left off, so an overnight laptop nap would shift the start
+    # past the bell. Recomputing from the wall clock self-corrects on wake.
+    ANNOUNCED=0
+    while :; do
+        SECS=$("$PY" -c "$GATE" seconds_to_open) || {
+            echo "[loop] open-time check FAILED (exit $?) — aborting, not guessing" >&2
+            exit 70
+        }
+        [ "$SECS" -le 0 ] && break
+        if [ "$ANNOUNCED" = "0" ]; then
+            echo "[loop] waiting ~${SECS}s until the XNYS open (re-checked every 5m)…"
+            ANNOUNCED=1
+        fi
+        CHUNK=$SECS
+        [ "$CHUNK" -gt 300 ] && CHUNK=300
+        sleep "$CHUNK"
+    done
 fi
 
 echo "[loop] db=$DB interval=${INTERVAL}s — Ctrl-C to stop (state survives)"
