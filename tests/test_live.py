@@ -299,3 +299,56 @@ class TestUnknownSymbolIsContained:
         assert "tick schedule" in out
         assert "--- NVDA ---" in out, "an unconfigured symbol killed the whole pass"
         assert "[decision] NVDA" in out
+
+
+class TestStrandedWarningSurvivesWeekends:
+    """Review finding F4: the N-03 warning's comment said 'every run' but the
+    non-trading-day early return skipped it — the one day an owner reviews
+    state at leisure was the one day the warning went silent."""
+
+    def test_warning_prints_on_a_non_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        store = StateStore(db)
+        stale = "NVDA260616C00205000"
+        store.save_position(
+            stale,
+            {
+                "symbol": "NVDA",
+                "occ_symbol": stale,
+                "phase": "OPEN",
+                "contracts": 2,
+                "entry_quote_cents": 420,
+                "cost_basis_per_contract_cents": 42400,
+                "peak_premium_cents": 420,
+                "realized_pnl_cents": 0,
+            },
+            dt.datetime(2026, 6, 16, 15, 0, tzinfo=NY),
+        )
+        store.close()
+
+        class SaturdayClock(FakeClock):
+            def session_date(self) -> dt.date:
+                return dt.date(2026, 6, 20)
+
+        monkeypatch.setattr(live, "TradingClock", SaturdayClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        rc = live.main(["--db", str(db)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "expired UNSETTLED" in out
+        assert stale in out
+
+    def test_no_db_is_not_invented_on_a_weekend(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class SaturdayClock(FakeClock):
+            def session_date(self) -> dt.date:
+                return dt.date(2026, 6, 20)
+
+        monkeypatch.setattr(live, "TradingClock", SaturdayClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        db = tmp_path / "never" / "p.db"
+        assert live.main(["--db", str(db)]) == 0
+        assert not db.exists(), "a warning pass must not create state"

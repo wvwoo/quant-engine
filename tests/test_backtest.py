@@ -190,7 +190,7 @@ class TestPathHonesty:
         assert "REALIZED equity only" in res.assumptions["max_drawdown"]
 
 
-def _force_approvals(monkeypatch, cfg: StrategyConfig):  # type: ignore[no-untyped-def]
+def _force_approvals(monkeypatch):  # type: ignore[no-untyped-def]
     """Patch the checklist INSIDE backtest to approve every in-window bar.
 
     These tests target the SAFETY rails, not the 7 gates — the gates have
@@ -257,7 +257,7 @@ class TestSafetyRailsParity:
     so. That poisons net_pnl, win_rate, drawdown AND the Sharpe input."""
 
     def test_daily_loss_limit_blocks_reentry(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-        _force_approvals(monkeypatch, CFG)
+        _force_approvals(monkeypatch)
         # Precondition arm: with the limit effectively OFF, the decaying
         # session re-enters after each stop — proving re-entry is reachable.
         unlimited = StrategyConfig(commission_per_contract_cents=0, daily_loss_limit_cents=10**9)
@@ -274,25 +274,34 @@ class TestSafetyRailsParity:
     def test_default_limit_stops_a_bad_day_after_one_loss(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         """The DEFAULT $212.50 limit binds on a realistic stop-out — this is
         the ~3x-loss distortion N-04 measured, pinned at default config."""
-        _force_approvals(monkeypatch, CFG)
+        _force_approvals(monkeypatch)
         trades, _, _ = run_session(_decaying_session(), CFG)
         assert len(trades) == 1
         assert -trades[0].realized_pnl_cents >= CFG.daily_loss_limit_cents
 
     def test_realized_losses_shrink_the_next_entry(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-        _force_approvals(monkeypatch, CFG)
-        # Huge limit => re-entry allowed; sizing must still shrink (QTS-4).
+        """Sharpened after review finding F1 proved the first version VACUOUS:
+        it compared only the SECOND trade, whose premium happened to jump so
+        high (28900c/contract) that 2 contracts fit even at the full mandate —
+        the old constant-capital code passed by coincidence. Measured: the
+        divergence appears at trade THREE (old: 6 contracts / 72,600c committed
+        at full mandate; new: 2 / 24,200c against the shrunken capital). The
+        invariant is therefore asserted for EVERY trade against the RUNNING
+        realized total — which the old code violates at t2 and cannot pass."""
+        _force_approvals(monkeypatch)
         cfg = StrategyConfig(commission_per_contract_cents=0, daily_loss_limit_cents=10_000_000)
         trades, _, _ = run_session(_decaying_session(), cfg)
-        assert len(trades) >= 2
-        first, second = trades[0], trades[1]
-        assert first.realized_pnl_cents < 0
-        cost0 = first.cost_basis_per_contract_cents * first.contracts
-        cost1 = second.cost_basis_per_contract_cents * second.contracts
-        assert cost1 <= cost0, "capital did not shrink after a realized loss"
-        assert cost1 <= cfg.sub_portfolio_cents + first.realized_pnl_cents, (
-            "the second entry committed cash the session no longer had"
-        )
+        assert len(trades) >= 3, "need at least three trades to see the divergence"
+        running = 0
+        for i, t in enumerate(trades):
+            allowed = min(cfg.sub_portfolio_cents, cfg.sub_portfolio_cents + running)
+            committed = t.cost_basis_per_contract_cents * t.contracts
+            assert committed <= allowed, (
+                f"trade {i} committed {committed}c but the session only had "
+                f"{allowed}c after {running}c of realized P&L"
+            )
+            running += t.realized_pnl_cents
+        assert running < 0, "precondition: the decaying session loses"
 
     def test_parity_is_declared_in_assumptions(self) -> None:
         res = run_backtest([make_session_data()], CFG)

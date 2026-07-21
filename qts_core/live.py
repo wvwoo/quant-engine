@@ -64,6 +64,17 @@ def main(argv: list[str] | None = None) -> int:
     session_date = clock.session_date()
 
     if not is_trading_day(session_date):
+        # Review finding F4: the [WARN] below claimed "every run" while this
+        # early return skipped it on non-trading days — exactly when an owner
+        # doing weekend housekeeping is most likely to look. Warn here too if
+        # the db already exists (never create one just to say it is empty).
+        if Path(args.db).exists():
+            weekend_store = StateStore(args.db)
+            try:
+                for occ in sorted(weekend_store.expired_positions(as_of=session_date)):
+                    print(f"[WARN] {occ}: expired UNSETTLED — owner action required.")
+            finally:
+                weekend_store.close()
         print(f"[halt] {session_date} is not an XNYS session — nothing to do")
         return 0
 

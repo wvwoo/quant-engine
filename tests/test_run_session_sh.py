@@ -58,10 +58,15 @@ class TestGateExitContract:
     def test_interrupted_step_stops_instead_of_continuing(self, tmp_path: Path) -> None:
         """Ctrl-C during the step used to be swallowed by `|| echo`; the loop
         then fired ANOTHER live step. 130 must stop the loop."""
+        # Review finding F3: matching on "$*" was defeated by the GATE
+        # source itself containing the literal 'seconds_to_open', so the
+        # in-session branch was dead and one branch did double duty by luck.
+        # Discriminate on the LAST argument (the gate mode) instead.
         body = (
-            'case "$*" in\n'
-            "  *seconds_to_open*) echo 0; exit 0 ;;\n"
-            "  *-c*) exit 0 ;;\n"  # gate: in session
+            "for a; do last=$a; done\n"
+            'case "$last" in\n'
+            "  seconds_to_open) echo 0; exit 0 ;;\n"
+            "  in_session) exit 0 ;;\n"
             "  *) exit 130 ;;\n"  # the live step: interrupted
             "esac"
         )
@@ -84,7 +89,10 @@ class TestSecondsToOpen:
         gate = text.split("GATE='")[1].split("\n'\n")[0]
         r = subprocess.run(
             [str(REPO / ".venv/bin/python"), "-c", gate, "seconds_to_open"],
-            capture_output=True, text=True, timeout=60, cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=REPO,
         )
         assert r.returncode == 0, r.stderr
         secs = int(r.stdout.strip())

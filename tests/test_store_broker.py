@@ -241,6 +241,15 @@ class _FlakyConn:
     def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
         return getattr(self._real, name)
 
+    def __setattr__(self, name: str, value: object) -> None:
+        # Review finding F4: reads were delegated but WRITES were not, so a
+        # StateStore method setting row_factory would set it on the wrapper
+        # and silently change behavior under test. Own fields stay local.
+        if name in ("_real", "_fail_on", "failed_once"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._real, name, value)
+
 
 class TestTransactionSurvivesItsOwnFailures:
     """N-07: COMMIT sat outside the try. A COMMIT failure (full disk, BUSY)
