@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from qts_core.broker import PaperBroker
@@ -34,6 +35,15 @@ from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
 from qts_core.store import StateStore
+
+
+def _guarded[T](symbol: str, fn: Callable[..., T], *args: object) -> T | None:
+    """Run one symbol's work; a failure costs that symbol, never the pass."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        print(f"[error] {symbol}: {type(exc).__name__}: {exc}")
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,21 +80,10 @@ def main(argv: list[str] | None = None) -> int:
 
     for symbol in symbols:
         print(f"--- {symbol} ---")
-        source = YFinanceSource(symbol)
-        # B4: 0DTE availability is CHECKED per symbol per day, never assumed.
-        # NVDA lists Mon/Wed/Fri only; SPY/QQQ list dailies (measured 2026-07-21).
-        if not source.has_same_day_expiry(session_date):
-            print(f"[halt] {symbol}: no 0DTE expiry listed for {session_date} (B4 gate)")
-            continue
-        try:
-            view = source.build_view(now=now, session_date=session_date)
-        except Exception as exc:  # provider hiccup must not kill the whole run
-            print(f"[error] {symbol}: {type(exc).__name__}: {exc}")
-            continue
-        print(
-            f"[view] {symbol} bars={len(view.bars)} priors={len(view.prior_sessions)} "
-            f"chain={len(view.chain)} spot={view.underlying_last}"
-        )
+        # The session is built BEFORE the provider is consulted, because the
+        # safety rail must not depend on the data feed (N-02): a throttled or
+        # unavailable provider is exactly when an open position most needs
+        # flattening, and the old loop `continue`d past step() in that case.
         session = PaperSession(
             store,
             PaperBroker(cfg, cfg.tick_schedule_for(symbol)),
@@ -94,7 +93,39 @@ def main(argv: list[str] | None = None) -> int:
             force_flat_at=force_flat,
             symbol=symbol,
         )
-        result = session.step(view)
+        source = YFinanceSource(symbol)
+        view = None
+        try:
+            # B4: 0DTE availability is CHECKED per symbol per day, never assumed.
+            # NVDA lists Mon/Wed/Fri only; SPY/QQQ list dailies (measured 2026-07-21).
+            if source.has_same_day_expiry(session_date):
+                view = source.build_view(now=now, session_date=session_date)
+            else:
+                print(f"[halt] {symbol}: no 0DTE expiry listed for {session_date} (B4 gate)")
+        except Exception as exc:  # provider hiccup must not kill the whole run
+            print(f"[error] {symbol}: {type(exc).__name__}: {exc}")
+
+        if view is None:
+            # No usable view. Entry is impossible either way, but an EXIT may
+            # still be overdue — and it needs only the clock and the ledger.
+            forced = _guarded(symbol, session.force_flat_if_due, now)
+            if forced is not None and forced.fills:
+                print(
+                    f"[force-flat/UNMARKED] {symbol}: liquidated at worst-case "
+                    "zero proceeds — no market data was available"
+                )
+            continue
+
+        print(
+            f"[view] {symbol} bars={len(view.bars)} priors={len(view.prior_sessions)} "
+            f"chain={len(view.chain)} spot={view.underlying_last}"
+        )
+        # The step owns position state, so a failure here is strictly more
+        # dangerous than a provider failure — and it was the one path with no
+        # guard at all (N-06). Contain it per symbol, never lose the pass.
+        result = _guarded(symbol, session.step, view)
+        if result is None:
+            continue
 
         if result.halted:
             print(f"[halt] {symbol}: {result.halted}")

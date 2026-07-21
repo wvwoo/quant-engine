@@ -13,7 +13,7 @@
 
 ## 🔍 ENTRY CHECKLIST AUDIT
 
-| Time | Symbol | Verdict | Failed checks |
+| Time (ET) | Symbol | Verdict | Failed checks |
 | :--- | :--- | :--- | :--- |
 | 10:15 | NVDA | 🟢 APPROVED | — |
 

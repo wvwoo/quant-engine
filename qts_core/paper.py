@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from qts_core.broker import Broker, Fill
-from qts_core.clock import NY
+from qts_core.clock import NY, require_aware
 from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.models import MarketView
 from qts_core.money import CONTRACT_MULTIPLIER
@@ -323,7 +323,7 @@ class PaperSession:
                 coid, now, fill.premium_cents, fill.cost_cents, fill.commission_cents
             )
             self.store.save_position(pos.occ_symbol, _pos_to_json(pos), now)
-        self._snapshot(view, pos)
+        self._snapshot(view.now, view.chain, pos)
         return StepResult(decision, (fill,), pos, None)
 
     def _manage_exits(self, pos: PositionState, view: MarketView) -> StepResult:
@@ -340,7 +340,7 @@ class PaperSession:
             # for: a contract that stopped being quotable near the close (G-01).
             if now < self.force_flat_at:
                 return StepResult(None, (), pos, halted="NO_MARK")
-            return self._force_flat_unmarked(pos, view)
+            return self._force_flat_unmarked(pos, now, view.chain)
         tick = self.cfg.tick_schedule_for(pos.symbol)
         new_state, exit_orders = evaluate(
             pos, quote.mid_cents, now, self.force_flat_at, self.cfg, tick
@@ -382,21 +382,46 @@ class PaperSession:
             for coid_, premium_, realized_, commission_ in pending:
                 self.store.record_fill(coid_, now, premium_, realized_, commission_)
             self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
-        self._snapshot(view, new_state)
+        self._snapshot(view.now, view.chain, new_state)
         halt = None
         if -self.store.realized_pnl_today(self.session_date) >= self.cfg.daily_loss_limit_cents:
             halt = "DAILY_LOSS_LIMIT"
         return StepResult(None, tuple(fills), new_state, halt)
 
-    def _force_flat_unmarked(self, pos: PositionState, view: MarketView) -> StepResult:
-        """Force-flat a position that cannot be priced (G-01).
+    def force_flat_if_due(self, now: dt.datetime) -> StepResult | None:
+        """Liquidate a held position using ONLY the clock and the ledger (N-02).
+
+        Exit management used to live exclusively inside ``step(view)``, and
+        live.py skips straight past ``step`` whenever the provider raises or
+        the B4 availability gate flips false. That made the safety rail
+        conditional on the one data feed most likely to be broken at the moment
+        it matters — and yfinance throttling is documented as expected, not
+        exotic. This path needs no market data at all.
+
+        Returns None when there is nothing to do (flat, another symbol's
+        position, or simply not force-flat time yet).
+        """
+        require_aware(now)
+        self.reconcile(now)
+        pos = self.any_open_position()
+        if pos is None:
+            return None
+        if self.symbol is not None and pos.symbol != self.symbol:
+            return None  # the holder's own pass owns its exits
+        if now < self.force_flat_at:
+            return None
+        return self._force_flat_unmarked(pos, now, ())
+
+    def _force_flat_unmarked(
+        self, pos: PositionState, now: dt.datetime, chain: tuple[Any, ...]
+    ) -> StepResult:
+        """Force-flat a position that cannot be priced (G-01 / N-02).
 
         Booked at worst-case ZERO proceeds through a DISTINCT reason, so the
         ledger never lets it be mistaken for a real market fill. Carrying the
         contract instead would leave a 0DTE position past the close, which is
         the specific hazard ADR-008 added the rail to prevent.
         """
-        now = view.now
         reason = ExitReason.FORCE_FLAT_UNMARKED.value
         seq = self.store.next_seq(self.session_date)
         coid = client_order_id(
@@ -429,20 +454,27 @@ class PaperSession:
         with self.store.transaction():
             self.store.record_fill(coid, now, fill.premium_cents, realized, fill.commission_cents)
             self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
-        self._snapshot(view, new_state)
+        self._snapshot(now, chain, new_state)
         return StepResult(None, (fill,), new_state, halted=reason)
 
-    def _snapshot(self, view: MarketView, pos: PositionState | None) -> None:
+    def _snapshot(
+        self,
+        now: dt.datetime,
+        chain: tuple[Any, ...],
+        pos: PositionState | None,
+    ) -> None:
+        """Record equity. Takes the chain, not a whole view, so the paths that
+        have no market data (force_flat_if_due) can still snapshot."""
         realized = self.store.realized_pnl_today(self.session_date)
         open_value = 0
         if pos is not None and pos.contracts > 0:
-            mark = next((q.mid_cents for q in view.chain if q.occ_symbol == pos.occ_symbol), None)
+            mark = next((q.mid_cents for q in chain if q.occ_symbol == pos.occ_symbol), None)
             if mark is not None:
                 open_value = mark * CONTRACT_MULTIPLIER * pos.contracts
         cash = self.cfg.sub_portfolio_cents + realized
         if pos is not None and pos.contracts > 0:
             cash -= pos.cost_basis_per_contract_cents * pos.contracts
-        self.store.snapshot_equity(view.now, self.session_date, cash, open_value, realized)
+        self.store.snapshot_equity(now, self.session_date, cash, open_value, realized)
 
 
 def load_fixture_session(path: str | Path) -> list[MarketView]:

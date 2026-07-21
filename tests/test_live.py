@@ -21,6 +21,7 @@ from qts_core import live
 from qts_core.clock import NY
 from qts_core.config import LiveTradingBlocked, StrategyConfig
 from qts_core.models import MarketView
+from qts_core.store import StateStore
 from tests.test_checklist import SESSION, make_view
 
 CFG = StrategyConfig(commission_per_contract_cents=0)
@@ -173,3 +174,109 @@ class TestStepAndReport:
         out = capsys.readouterr().out
         for symbol in CFG.tickers:
             assert f"--- {symbol} ---" in out
+
+
+class TestRailSurvivesProviderFailure:
+    """N-02: exit management lived ONLY inside session.step(view), and main()
+    skipped straight past it whenever the provider raised or the B4 gate went
+    false. The rail was therefore conditional on the exact data feed most
+    likely to be broken at the moment it matters — and yfinance throttling is
+    documented as expected, not exotic."""
+
+    def _holding(self, db: Path) -> None:
+        """Put a real open position in the ledger via the normal entry path."""
+        from qts_core.broker import PaperBroker
+        from qts_core.paper import PaperSession
+
+        s = PaperSession(
+            StateStore(db),
+            PaperBroker(CFG, CFG.tick_schedule_for("NVDA")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=dt.datetime(2026, 6, 17, 9, 30, tzinfo=NY),
+            force_flat_at=dt.datetime(2026, 6, 17, 15, 30, tzinfo=NY),
+        )
+        r = s.step(make_view(NOW))
+        assert r.position is not None and r.position.contracts > 0
+        s.store.close()
+
+    def _late_clock(self) -> type[FakeClock]:
+        class LateClock(FakeClock):
+            def now_utc(self) -> dt.datetime:
+                return dt.datetime(2026, 6, 17, 15, 35, tzinfo=NY).astimezone(dt.UTC)
+
+        return LateClock
+
+    def test_provider_exception_does_not_strand_an_open_position(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        self._holding(db)
+        monkeypatch.setattr(live, "TradingClock", self._late_clock())
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, raises=True))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1, "the position was left unmanaged when the provider failed"
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+        assert store.open_positions() == {}
+
+    def test_b4_gate_going_false_does_not_strand_an_open_position(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "p.db"
+        self._holding(db)
+        monkeypatch.setattr(live, "TradingClock", self._late_clock())
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, has_expiry=False))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+
+    def test_before_force_flat_a_feed_failure_changes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The rail fires on time, not early: a feed failure at 10:15 must not
+        liquidate a healthy position."""
+        db = tmp_path / "p.db"
+        self._holding(db)
+        _wire(monkeypatch, lambda s: FakeSource(s, raises=True))
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        assert [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"] == []
+        assert store.open_positions() != {}
+
+
+class TestStepFailureIsContained:
+    """N-06: the provider call was guarded, but the step that owns position
+    state was not — so one symbol's sqlite error killed the whole pass, skipped
+    every remaining symbol, and left the report silently stale on disk."""
+
+    def test_one_symbol_step_failure_does_not_skip_the_rest(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import qts_core.paper as paper_mod
+
+        real_step = paper_mod.PaperSession.step
+        seen: list[str] = []
+
+        def flaky_step(self, view):  # type: ignore[no-untyped-def]
+            symbol = view.meta.get("symbol", "")
+            seen.append(symbol)
+            if symbol == "QQQ":
+                raise RuntimeError("database is locked")
+            return real_step(self, view)
+
+        monkeypatch.setattr(paper_mod.PaperSession, "step", flaky_step)
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        report = tmp_path / "r.md"
+        rc = live.main(
+            ["--db", str(tmp_path / "p.db"), "--symbols", "QQQ,NVDA", "--report", str(report)]
+        )
+        assert rc == 0
+        assert "NVDA" in seen, "a step failure on QQQ skipped every later symbol"
+        assert "[error] QQQ" in capsys.readouterr().out
+        assert report.exists(), "the report must still be written after a contained failure"

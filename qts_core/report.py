@@ -12,9 +12,22 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+from qts_core.clock import to_et
 from qts_core.config import PROVENANCE, StrategyConfig
 from qts_core.money import fmt
 from qts_core.store import StateStore
+
+
+def _et_hhmm(ts: str) -> str:
+    """Stored ISO stamp -> HH:MM in EXCHANGE time.
+
+    This document is headed ET throughout, but the stamps are written from
+    ``TradingClock.now_utc()`` in production, so slicing the raw string printed
+    UTC — a 10:14 ET decision rendered as 14:14 (G-08). The golden fixtures
+    stamp in NY, where the slice happened to be correct, so the regression gate
+    was structurally unable to see this. Convert explicitly instead.
+    """
+    return to_et(dt.datetime.fromisoformat(ts)).strftime("%H:%M")
 
 
 def _banner(cfg: StrategyConfig) -> str:
@@ -50,13 +63,13 @@ def render_session_report(store: StateStore, cfg: StrategyConfig, session_date: 
     if decisions:
         add("## 🔍 ENTRY CHECKLIST AUDIT")
         add("")
-        add("| Time | Symbol | Verdict | Failed checks |")
+        add("| Time (ET) | Symbol | Verdict | Failed checks |")
         add("| :--- | :--- | :--- | :--- |")
         for ts, symbol, ok, blob in decisions:
             payload = json.loads(blob)
             failed = ", ".join(c["name"] for c in payload["checks"] if not c["passed"]) or "—"
             verdict = "🟢 APPROVED" if ok else "🔴 VETOED"
-            add(f"| {ts[11:16]} | {symbol} | {verdict} | {failed} |")
+            add(f"| {_et_hhmm(ts)} | {symbol} | {verdict} | {failed} |")
         add("")
 
     if approved:
