@@ -8,17 +8,19 @@
 ## 🌐 TELEMETRY & ROUTING METADATA
 * **Session Date:** `2026-07-21`
 * **Engine:** `qts-core v0.1.0 / paper`
-* **Decisions Evaluated:** `4`
+* **Decisions Evaluated:** `6`
 * **Orders (journaled/filled):** `0`
 
 ## 🔍 ENTRY CHECKLIST AUDIT
 
-| Time | Symbol | Verdict | Failed checks |
+| Time (ET) | Symbol | Verdict | Failed checks |
 | :--- | :--- | :--- | :--- |
-| 14:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
-| 14:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
-| 15:13 | SPY | 🔴 VETOED | rvol |
-| 15:13 | QQQ | 🔴 VETOED | rvol |
+| 10:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
+| 10:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
+| 11:13 | SPY | 🔴 VETOED | rvol |
+| 11:13 | QQQ | 🔴 VETOED | rvol |
+| 15:08 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:08 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram |
 
 ## 🛡️ RISK PARAMETERS IN FORCE
 
@@ -35,6 +37,8 @@
 ## 📈 SESSION P&L (PAPER, MODELED)
 
 * **Realized P&L today:** **$0.00**
+* **Cash:** $850.00 | **Open position value (mark):** $0.00
+* **Equity snapshots:** 1
 
 ---
 *Assumptions: paper fills at quote±100bp, commission 65c/contract/side, marks at option mid. Cherry-picking of sessions is prohibited; this report covers one full session as recorded in the state store.*

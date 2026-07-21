@@ -74,9 +74,10 @@ svg.eq{width:100%;height:120px;display:block}
 </div>
 
 <div class="grid kpis">
-  <div class="card kpi"><div class="cap">حقوق الملكية (paper)</div><div class="val" id="k-equity">—</div></div>
+  <div class="card kpi"><div class="cap">حقوق الملكية (paper)</div><div class="val" id="k-equity">—</div><div class="cap" id="k-measured">—</div></div>
   <div class="card kpi"><div class="cap">ربح/خسارة اليوم (مُحقَّق)</div><div class="val" id="k-pnl">—</div></div>
   <div class="card kpi"><div class="cap">النقد</div><div class="val" id="k-cash">—</div></div>
+  <div class="card kpi"><div class="cap">الأداء التراكمي</div><div class="val" id="k-cumulative">—</div><div class="cap" id="k-cumulative-note">—</div></div>
   <div class="card kpi"><div class="cap">قيمة المراكز المفتوحة (mark)</div><div class="val" id="k-open">—</div></div>
   <div class="card kpi"><div class="cap">جلسة</div><div class="val" id="k-session" style="font-size:16px">—</div></div>
 </div>
@@ -117,6 +118,7 @@ svg.eq{width:100%;height:120px;display:block}
   (استُبدل ادّعاء 1.html الكاذب «الأزرار تؤثّر فعليًّا» بهذه الجملة). تغيير القواعد = تعديل config + مراجعة + اختبارات.</div>
 </div>
 
+<div id="expired-warn" class="card" style="display:none;border-color:#d08c00;color:#d08c00"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -131,7 +133,15 @@ function setConn(ok, why) {
 function drawEquity(points) {
   const svg = $("equity-svg");
   while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (!points || points.length < 2) { $("eq-empty").hidden = false; svg.style.display = "none"; return; }
+  if (!points || points.length < 2) {
+    // "no snapshots" and "one snapshot, nothing to draw a line between" are
+    // different facts. Reporting the second as the first is the same class of
+    // small lie this dashboard exists to avoid.
+    $("eq-empty").textContent = !points || points.length === 0
+      ? "لا توجد نبضة — لا لقطات حقوق لهذه الجلسة"
+      : "لقطة واحدة فقط — لا يمكن رسم منحنى بعد";
+    $("eq-empty").hidden = false; svg.style.display = "none"; return;
+  }
   $("eq-empty").hidden = true; svg.style.display = "block";
   const vals = points.map(p => p.equity_cents);
   const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
@@ -188,6 +198,11 @@ async function refreshInner() {
   $("mode").textContent = ov.mode;
   $("capital").textContent = cents(ov.sub_portfolio_cents);
   $("k-equity").textContent = cents(ov.equity_cents);
+  // An unmeasured day must not look measured: with no snapshot the API is
+  // echoing the CONFIGURED mandate, not a computed figure (G-15).
+  const meas = $("k-measured");
+  meas.textContent = ov.equity_measured ? "مُقاس من المخزن" : "غير مُقاس — قيمة التفويض المهيّأة";
+  meas.style.color = ov.equity_measured ? "" : "var(--warn, #d08c00)";
   $("k-cash").textContent = cents(ov.cash_cents);
   $("k-open").textContent = cents(ov.open_value_cents);
   $("k-session").textContent = ov.session_date;
@@ -195,6 +210,22 @@ async function refreshInner() {
   pnl.textContent = cents(ov.realized_pnl_today_cents);
   pnl.className = "val " + (ov.realized_pnl_today_cents > 0 ? "up" : ov.realized_pnl_today_cents < 0 ? "down" : "");
   drawEquity(ov.equity_points);
+
+  // Expired 0DTE rows are REPORTED, never mixed into live holdings: the engine
+  // refuses to trade them, so the page must not imply otherwise (G-07).
+  const expired = Object.keys(ov.expired_positions || {});
+  const warn = $("expired-warn");
+  if (expired.length) {
+    warn.style.display = "";
+    warn.textContent = "مراكز منتهية غير مُسوّاة (لا تُتداول): " + expired.join("، ");
+  } else {
+    warn.style.display = "none";
+  }
+  const cum = ov.cumulative;
+  if (cum) {
+    $("k-cumulative").textContent = cents(cum.realized_cents);
+    $("k-cumulative-note").textContent = cum.note;
+  }
 
   const ex = await getJSON("/api/execution");
   const ordersBody = $("orders");
