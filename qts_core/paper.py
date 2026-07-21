@@ -509,6 +509,9 @@ class PaperSession:
         if pos is not None and pos.contracts > 0:
             cash -= pos.cost_basis_per_contract_cents * pos.contracts
         self.store.snapshot_equity(now, self.session_date, cash, open_value, realized)
+        # Cross-session ledger — DISPLAY ONLY (ADR-010). Nothing read back from
+        # here feeds sizing or the loss limit; the $850 mandate is per-day.
+        self.store.upsert_session_pnl(self.session_date, realized, now)
 
 
 def load_fixture_session(path: str | Path) -> list[MarketView]:

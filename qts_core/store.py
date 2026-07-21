@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS equity (
     open_value_cents INTEGER NOT NULL,
     realized_pnl_today_cents INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    session_date        TEXT PRIMARY KEY,
+    realized_pnl_cents  INTEGER NOT NULL,
+    updated_at          TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS decisions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     session_date    TEXT NOT NULL,
@@ -336,6 +341,43 @@ class StateStore:
             " ORDER BY id",
             (session_date.isoformat(),),
         ).fetchall()
+
+    # ---------------------------------------------------------- cross-session
+    def upsert_session_pnl(
+        self, session_date: dt.date, realized_cents: int, now: dt.datetime
+    ) -> None:
+        """Record one session's realized P&L.
+
+        DISPLAY ONLY (ADR-010). Capital, sizing and the daily loss limit stay
+        pinned to the configured $850 mandate every morning; nothing read back
+        from here feeds a trading decision. It exists because "everything
+        resets each morning" made multi-day performance invisible, not because
+        the account is meant to compound.
+        """
+        self._conn.execute(
+            """INSERT INTO sessions (session_date, realized_pnl_cents, updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(session_date) DO UPDATE SET
+                   realized_pnl_cents=excluded.realized_pnl_cents,
+                   updated_at=excluded.updated_at""",
+            (session_date.isoformat(), realized_cents, now.isoformat()),
+        )
+
+    def cumulative_performance(self) -> list[tuple[str, int, int]]:
+        """(session_date, realized_that_day, running_total) oldest first.
+
+        The running total is DERIVED on read rather than stored, so it can
+        never drift out of step with the per-session figures it sums.
+        """
+        rows = self._conn.execute(
+            "SELECT session_date, realized_pnl_cents FROM sessions ORDER BY session_date"
+        ).fetchall()
+        out: list[tuple[str, int, int]] = []
+        total = 0
+        for day, realized in rows:
+            total += int(realized)
+            out.append((day, int(realized), total))
+        return out
 
     def realized_pnl_today(self, session_date: dt.date) -> int:
         """Sum of realized P&L from FILLED SELL legs minus all commissions today.

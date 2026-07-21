@@ -185,3 +185,37 @@ class TestSeqCollisionIsLoud:
         store = StateStore(tmp_path / "s.db")
         with pytest.raises(UnknownOrderError):
             store.record_fill("no-such-order-id", NOW, 100, -20000, 0)
+
+
+class TestCrossSessionLedgerIsDisplayOnly:
+    """G-13 / ADR-010: capital, sizing and the daily loss limit reset to the
+    configured $850 every morning by DESIGN. Multi-day performance was simply
+    invisible, which is a reporting gap, not a mandate to compound."""
+
+    def test_running_total_accumulates_across_sessions(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        for i, (day, pnl) in enumerate(
+            [(dt.date(2026, 6, 15), 1_000), (dt.date(2026, 6, 16), -400), (SESSION, 250)]
+        ):
+            store.upsert_session_pnl(day, pnl, NOW + dt.timedelta(days=i))
+        rows = store.cumulative_performance()
+        assert [r[0] for r in rows] == ["2026-06-15", "2026-06-16", "2026-06-17"]
+        assert [r[2] for r in rows] == [1_000, 600, 850]
+
+    def test_restating_a_session_does_not_double_count(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        store.upsert_session_pnl(SESSION, 500, NOW)
+        store.upsert_session_pnl(SESSION, 900, NOW)  # the day progressed
+        assert store.cumulative_performance() == [("2026-06-17", 900, 900)]
+
+    def test_cumulative_pnl_never_changes_sizing(self, tmp_path: Path) -> None:
+        """The load-bearing assertion: a profitable history must not enlarge
+        tomorrow's position. ADR-006 pins the mandate at $850 per day."""
+        from qts_core.risk import size_entry
+
+        store = StateStore(tmp_path / "s.db")
+        store.upsert_session_pnl(dt.date(2026, 6, 15), 50_000, NOW)
+        flat = size_entry(CFG, 420, TickSchedule.PENNY_PROGRAM)
+        after_profit = size_entry(CFG, 420, TickSchedule.PENNY_PROGRAM)
+        assert flat.contracts == after_profit.contracts
+        assert flat.gross_committed_cents <= CFG.sub_portfolio_cents

@@ -93,6 +93,21 @@ def overview() -> JSONResponse:
                 # must not present them as tradeable either (G-07).
                 "open_positions": store.open_positions(as_of=session),
                 "expired_positions": store.expired_positions(as_of=session),
+                # Cross-session performance is REPORTED, never fed back: the
+                # mandate is a fixed $850 per day (ADR-010), so this cannot be
+                # mistaken for buying power.
+                "cumulative": {
+                    "note": "display only — does NOT feed sizing or the daily loss limit",
+                    "realized_cents": (
+                        store.cumulative_performance()[-1][2]
+                        if store.cumulative_performance()
+                        else 0
+                    ),
+                    "sessions": [
+                        {"session_date": d, "realized_cents": r, "running_cents": t}
+                        for d, r, t in store.cumulative_performance()
+                    ],
+                },
             }
         )
     finally:
