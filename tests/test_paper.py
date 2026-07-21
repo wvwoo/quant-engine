@@ -340,3 +340,57 @@ class TestStalePositionQuarantine:
         assert r.position is not None
         assert s.any_open_position() is not None
         assert s.expired_positions() == []
+
+
+class TestSharedCapitalAcrossSymbols:
+    """Capital is one concentrated sub-portfolio: while any symbol holds a
+    position, no other symbol may open one."""
+
+    def test_second_symbol_is_blocked_while_first_holds(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        store = StateStore(db)
+        broker = PaperBroker(CFG, CFG.tick_schedule_for("NVDA"))
+        nvda = PaperSession(
+            store,
+            broker,
+            CFG,
+            session_date=SESSION,
+            session_open_et=OPEN,
+            force_flat_at=FLAT_AT,
+            symbol="NVDA",
+        )
+        r = nvda.step(make_view())
+        assert r.position is not None and r.position.symbol == "NVDA"
+
+        spy = PaperSession(
+            store,
+            PaperBroker(CFG, CFG.tick_schedule_for("SPY")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=OPEN,
+            force_flat_at=FLAT_AT,
+            symbol="SPY",
+        )
+        r2 = spy.step(make_view())
+        assert r2.halted == "CAPITAL_COMMITTED:NVDA"
+        assert r2.fills == ()
+        buys = [o for o in store.orders_for_session(SESSION) if o["side"] == "BUY"]
+        assert len(buys) == 1, "a second symbol committed capital that was already spent"
+
+    def test_holder_still_manages_its_own_exits(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        store = StateStore(db)
+        nvda = PaperSession(
+            store,
+            PaperBroker(CFG, CFG.tick_schedule_for("NVDA")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=OPEN,
+            force_flat_at=FLAT_AT,
+            symbol="NVDA",
+        )
+        r = nvda.step(make_view())
+        assert r.position is not None
+        stop = r.position.stop_level(CFG)
+        r2 = nvda.step(TestExitFlow()._view_with_mark(stop - 2, et(10, 30)))
+        assert r2.position is not None and r2.position.phase is Phase.CLOSED

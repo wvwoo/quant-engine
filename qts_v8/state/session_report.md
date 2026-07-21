@@ -8,7 +8,7 @@
 ## 🌐 TELEMETRY & ROUTING METADATA
 * **Session Date:** `2026-07-21`
 * **Engine:** `qts-core v0.1.0 / paper`
-* **Decisions Evaluated:** `1`
+* **Decisions Evaluated:** `4`
 * **Orders (journaled/filled):** `0`
 
 ## 🔍 ENTRY CHECKLIST AUDIT
@@ -16,6 +16,9 @@
 | Time | Symbol | Verdict | Failed checks |
 | :--- | :--- | :--- | :--- |
 | 14:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
+| 14:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
+| 15:13 | SPY | 🔴 VETOED | rvol |
+| 15:13 | QQQ | 🔴 VETOED | rvol |
 
 ## 🛡️ RISK PARAMETERS IN FORCE
 

@@ -35,7 +35,11 @@ from qts_core.store import StateStore
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One live paper step (delayed data).")
-    parser.add_argument("--symbol", default="SPY")
+    parser.add_argument(
+        "--symbols",
+        default=None,
+        help="comma-separated; defaults to the configured universe",
+    )
     parser.add_argument("--db", default="qts_v8/state/paper.db")
     parser.add_argument("--report", default=None, help="write session report to this path")
     args = parser.parse_args(argv)
@@ -49,53 +53,63 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[halt] {session_date} is not an XNYS session — nothing to do")
         return 0
 
-    source = YFinanceSource(args.symbol)
-    if not source.has_same_day_expiry(session_date):
-        print(
-            f"[halt] {args.symbol} lists NO 0DTE expiry for {session_date} (B4 gate) — "
-            "no decision is possible today for this symbol"
-        )
-        return 0
-
-    view = source.build_view(now=now, session_date=session_date)
-    print(
-        f"[view] {args.symbol} {session_date} bars={len(view.bars)} "
-        f"priors={len(view.prior_sessions)} chain={len(view.chain)} "
-        f"spot={view.underlying_last}"
+    symbols = (
+        [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+        if args.symbols
+        else list(cfg.tickers)
     )
-
+    force_flat = effective_force_flat_et(
+        session_date, cfg.force_flat_et, dt.timedelta(minutes=cfg.force_flat_close_buffer_min)
+    )
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(args.db)
-    session = PaperSession(
-        store,
-        PaperBroker(cfg, cfg.tick_schedule_for(args.symbol)),
-        cfg,
-        session_date=session_date,
-        session_open_et=session_open_et(session_date),
-        force_flat_at=effective_force_flat_et(
-            session_date, cfg.force_flat_et, dt.timedelta(minutes=cfg.force_flat_close_buffer_min)
-        ),
-    )
-    result = session.step(view)
 
-    if result.halted:
-        print(f"[halt] session halted: {result.halted}")
-    if result.decision is not None:
-        print(f"[decision] approved={result.decision.approved}")
-        for c in result.decision.checks:
-            mark = "PASS" if c.passed else "FAIL"
-            print(f"  {mark:4} {c.name:20} {c.value}  ({c.reason})")
-    for fill in result.fills:
+    for symbol in symbols:
+        print(f"--- {symbol} ---")
+        source = YFinanceSource(symbol)
+        # B4: 0DTE availability is CHECKED per symbol per day, never assumed.
+        # NVDA lists Mon/Wed/Fri only; SPY/QQQ list dailies (measured 2026-07-21).
+        if not source.has_same_day_expiry(session_date):
+            print(f"[halt] {symbol}: no 0DTE expiry listed for {session_date} (B4 gate)")
+            continue
+        try:
+            view = source.build_view(now=now, session_date=session_date)
+        except Exception as exc:  # provider hiccup must not kill the whole run
+            print(f"[error] {symbol}: {type(exc).__name__}: {exc}")
+            continue
         print(
-            f"[fill/MODELED] {fill.client_order_id[:8]}… premium={fill.premium_cents}c "
-            f"cash={fill.cost_cents}c commission={fill.commission_cents}c"
+            f"[view] {symbol} bars={len(view.bars)} priors={len(view.prior_sessions)} "
+            f"chain={len(view.chain)} spot={view.underlying_last}"
         )
-    if result.position is not None:
-        p = result.position
-        print(
-            f"[position] {p.occ_symbol} phase={p.phase.value} contracts={p.contracts} "
-            f"basis={p.cost_basis_per_contract_cents}c/contract"
+        session = PaperSession(
+            store,
+            PaperBroker(cfg, cfg.tick_schedule_for(symbol)),
+            cfg,
+            session_date=session_date,
+            session_open_et=session_open_et(session_date),
+            force_flat_at=force_flat,
+            symbol=symbol,
         )
+        result = session.step(view)
+
+        if result.halted:
+            print(f"[halt] {symbol}: {result.halted}")
+        if result.decision is not None:
+            print(f"[decision] {symbol} approved={result.decision.approved}")
+            for c in result.decision.checks:
+                mark = "PASS" if c.passed else "FAIL"
+                print(f"  {mark:4} {c.name:20} {c.value}  ({c.reason})")
+        for fill in result.fills:
+            print(
+                f"[fill/MODELED] {symbol} {fill.client_order_id[:8]}… "
+                f"premium={fill.premium_cents}c cash={fill.cost_cents}c"
+            )
+        if result.position is not None:
+            p = result.position
+            print(
+                f"[position] {p.occ_symbol} phase={p.phase.value} "
+                f"contracts={p.contracts} basis={p.cost_basis_per_contract_cents}c"
+            )
 
     if args.report:
         Path(args.report).write_text(render_session_report(store, cfg, session_date))

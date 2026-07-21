@@ -119,6 +119,7 @@ class PaperSession:
         session_date: dt.date,
         session_open_et: dt.datetime,
         force_flat_at: dt.datetime,
+        symbol: str | None = None,
     ) -> None:
         require_paper_mode(cfg)  # boot gate — every constructor call, no exceptions
         self.store = store
@@ -127,6 +128,7 @@ class PaperSession:
         self.session_date = session_date
         self.session_open_et = session_open_et
         self.force_flat_at = force_flat_at
+        self.symbol = symbol
         # Recover at construction: a caller that only inspects state (never
         # steps) must still see the truth the ledger records.
         self.reconcile()
@@ -256,6 +258,11 @@ class PaperSession:
 
         pos = self.any_open_position()
         if pos is not None:
+            if self.symbol is not None and pos.symbol != self.symbol:
+                # Capital is a SHARED, concentrated sub-portfolio: while any
+                # symbol holds a position, no other symbol may open one. The
+                # holder's own view manages its exits.
+                return StepResult(None, (), None, halted=f"CAPITAL_COMMITTED:{pos.symbol}")
             return self._manage_exits(pos, view)
 
         # -- flat: entry path, guarded by the safety rails ----------------
