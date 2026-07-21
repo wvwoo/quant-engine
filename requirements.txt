@@ -1,0 +1,15 @@
+# Runtime dependencies — pinned to the versions measured in the original venv (2026-07-21).
+# Transitive deps are resolved by pip; only direct deps are listed here.
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.17.1
+yfinance==1.4.1
+
+# Exchange calendars: the strategy trades a 09:46-11:30 America/New_York window on
+# 0DTE expiries. Holidays and half-days change the session, so the calendar is not
+# optional — see decisions.md ADR-008 and the clock.py hazard list.
+exchange-calendars
+
+# FastAPI backend that serves real state to the dashboard (Phase 5).
+fastapi
+uvicorn

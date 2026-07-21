@@ -1,0 +1,13 @@
+-r requirements.txt
+
+# --- test + determinism toolchain (baseline was 0 tests, pytest not even installed) ---
+pytest
+pytest-socket        # network OFF inside tests; a golden fixture must never hit the wire
+time-machine         # frozen clock; maintained C-level alternative to freezegun
+
+# --- static gates ---
+mypy
+ruff
+
+# --- supply chain ---
+pip-audit
