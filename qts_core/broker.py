@@ -49,13 +49,18 @@ class PaperBroker:
     def __init__(self, cfg: StrategyConfig, tick: TickSchedule) -> None:
         self._cfg = cfg
         self._tick = tick
-        self._fills: dict[str, Fill] = {}  # idempotency at the broker seam too
+        # In-memory, so this is idempotency WITHIN one instance only — a new
+        # process (and live.py builds a fresh broker per symbol per run) starts
+        # empty. Restart safety does not come from here: it comes from the
+        # deterministic client_order_id, the intent journal, and reconcile()
+        # in the store. Claiming otherwise credited the wrong mechanism (G-06).
+        self._fills: dict[str, Fill] = {}
 
     def execute(
         self, intent: OrderIntent, bid_cents: int, ask_cents: int, now: dt.datetime
     ) -> Fill:
-        # Replay of an already-executed intent returns the ORIGINAL fill —
-        # restart-safe by identity, not by luck.
+        # Replay of an intent this INSTANCE already executed returns the
+        # original fill, so a retry inside one run cannot double-fill.
         prior = self._fills.get(intent.client_order_id)
         if prior is not None:
             return prior

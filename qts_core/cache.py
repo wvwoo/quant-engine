@@ -2,16 +2,27 @@
 
 The mandate asked for both, and the legacy scanner had neither: it fired ~20
 unthrottled Yahoo requests per run and refetched a year of daily history every
-time (finding no-rate-limit-no-cache). yfinance raises YFRateLimitError when
-Yahoo throttles, so an unthrottled loop is a self-inflicted outage.
+time (finding no-rate-limit-no-cache).
 
-Design notes:
-- Cache keys include the session date and a coarse time bucket, so intraday
-  quotes expire naturally while daily history is reused all day.
-- Writes are atomic (temp file + os.replace) so a crash cannot leave a
+What is actually here, stated exactly (G-04 — an earlier version of this
+docstring described a design that was never built, which in a project whose
+value is measured honesty is a defect, not a typo):
+
+- DiskCache is a plain JSON store with NO TTL and NO time bucketing. Keys come
+  from the caller; `get()` returns whatever is on disk regardless of age.
+  Expiry, where it matters, is a property of the KEY the caller chooses.
+- Exactly ONE caller uses it today: YFinanceSource.expirations(), keyed
+  (symbol, session_date) because the listed expiries do not change intraday.
+  fetch_bars() and fetch_chain() are NOT cached — they are refetched on every
+  call, which is deliberate for quotes and simply unoptimised for bars.
+- Writes are atomic (temp file + fsync + os.replace) so a crash cannot leave a
   half-written JSON that poisons the next run.
 - The limiter is per-process and monotonic-clock based; it never sleeps
   negative and never consults the wall clock (which this codebase bans).
+
+The rate limiting is the load-bearing half: the legacy scanner fired ~20
+unthrottled Yahoo requests per run, and yfinance raises YFRateLimitError when
+Yahoo throttles, so an unthrottled loop is a self-inflicted outage.
 """
 
 from __future__ import annotations

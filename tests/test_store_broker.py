@@ -137,3 +137,51 @@ class TestPaperBroker:
         b = PaperBroker(CFG, TickSchedule.FULL_PENNY)
         fill = b.execute(intent(contracts=2), 417, 420, NOW)
         assert fill.commission_cents == 130
+
+
+class TestSeqCollisionIsLoud:
+    """G-03: the schema comment promised UNIQUE(session_date, seq) would make a
+    racing-session collision 'an error, not a lost order'. INSERT OR IGNORE
+    guaranteed the opposite, and both call sites discarded the return value —
+    so the broker executed, record_fill updated ZERO rows, and save_position
+    committed a position with no order behind it. reconcile() rebuilds only
+    from FILLED order rows and never enumerates the positions table, so the
+    phantom could never be cleaned up."""
+
+    def _other_symbol_same_seq(self, seq: int) -> OrderIntent:
+        occ = "SPY260617C00628000"  # different contract, SAME (session, seq)
+        return OrderIntent(
+            client_order_id=client_order_id("qts-v1", SESSION, occ, "BUY", seq),
+            session_date=SESSION,
+            strategy="qts-v1",
+            occ_symbol=occ,
+            side="BUY",
+            contracts=1,
+            limit_cents=500,
+            reason="ENTRY",
+            seq=seq,
+        )
+
+    def test_colliding_seq_raises_instead_of_vanishing(self, tmp_path: Path) -> None:
+        from qts_core.store import SeqCollisionError
+
+        store = StateStore(tmp_path / "s.db")
+        assert store.journal_intent(intent(seq=0), NOW) is True
+        with pytest.raises(SeqCollisionError, match="seq"):
+            store.journal_intent(self._other_symbol_same_seq(0), NOW)
+
+    def test_identical_replay_is_still_a_silent_no_op(self, tmp_path: Path) -> None:
+        """The fix must not turn legitimate restart replay into an error —
+        that is the whole idempotency contract."""
+        store = StateStore(tmp_path / "s.db")
+        assert store.journal_intent(intent(seq=0), NOW) is True
+        assert store.journal_intent(intent(seq=0), NOW) is False
+
+    def test_fill_for_an_unjournaled_order_is_refused(self, tmp_path: Path) -> None:
+        """record_fill was an UPDATE with no rowcount check: a fill for an
+        order that is not in the ledger updated nothing and said nothing."""
+        from qts_core.store import UnknownOrderError
+
+        store = StateStore(tmp_path / "s.db")
+        with pytest.raises(UnknownOrderError):
+            store.record_fill("no-such-order-id", NOW, 100, -20000, 0)

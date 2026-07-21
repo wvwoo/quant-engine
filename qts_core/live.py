@@ -1,6 +1,6 @@
 """Live paper-trading step runner (CLI).
 
-    .venv/bin/python -m qts_core.live --symbol SPY [--db qts_v8/state/paper.db]
+    .venv/bin/python -m qts_core.live --symbols SPY [--db qts_v8/state/paper.db]
 
 Performs ONE full paper step against live (delayed) yfinance data: builds a
 MarketView, runs the checklist, journals/fills through the PaperBroker if
@@ -8,8 +8,11 @@ approved, persists state, and prints the reasoned decision. Loop it with cron
 or a shell loop for a continuous session; the state store makes any number of
 restarts safe.
 
-This is paper trading only. require_paper_mode() runs at import of the
-session; there is no live-order path in this codebase.
+This is paper trading only. require_paper_mode() is called at the TOP of
+main(), before any network I/O — it is not an import-time gate, and relying on
+PaperSession's constructor was not a boot gate at all: a run where every symbol
+fails the B4 availability check never constructs a session, so the check was
+reachable-only-sometimes (G-02). There is no live-order path in this codebase.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from qts_core.clock import (
     is_trading_day,
     session_open_et,
 )
-from qts_core.config import StrategyConfig
+from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
@@ -45,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     cfg = StrategyConfig()
+    require_paper_mode(cfg)  # BOOT gate: before the clock, the network, the db
     clock = TradingClock.system()
     now = clock.now_utc()
     session_date = clock.session_date()

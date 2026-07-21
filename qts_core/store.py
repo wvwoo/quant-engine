@@ -46,8 +46,11 @@ CREATE TABLE IF NOT EXISTS orders (
     fill_cost_cents      INTEGER,
     commission_cents     INTEGER,
     -- Two sessions racing on one db would both read the same next_seq and one
-    -- would silently overwrite the other. Make the collision an error, not a
-    -- lost order (finding QTS-3).
+    -- would silently overwrite the other (finding QTS-3). NOTE: this
+    -- constraint alone does NOT raise — journal_intent uses INSERT OR IGNORE
+    -- so that a replayed intent is a no-op, and OR IGNORE swallows a UNIQUE
+    -- violation just as happily. journal_intent therefore distinguishes the
+    -- two cases explicitly and raises SeqCollisionError; see there (G-03).
     UNIQUE (session_date, seq)
 );
 CREATE TABLE IF NOT EXISTS positions (
@@ -78,6 +81,19 @@ def client_order_id(
 ) -> str:
     """Deterministic: same intent -> same id, across process restarts."""
     return str(uuid.uuid5(_NAMESPACE, f"{strategy}|{session_date}|{occ_symbol}|{side}|{seq}"))
+
+
+class SeqCollisionError(RuntimeError):
+    """Two different orders claimed the same (session_date, seq).
+
+    Never a replay — a replay carries the SAME deterministic client_order_id.
+    This means two writers raced on next_seq, and continuing would execute at
+    the broker while the ledger silently kept only one of them (G-03).
+    """
+
+
+class UnknownOrderError(RuntimeError):
+    """A fill was recorded for an order that is not in the ledger."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,8 +145,18 @@ class StateStore:
 
     # ---------------------------------------------------------- orders
     def journal_intent(self, intent: OrderIntent, now: dt.datetime) -> bool:
-        """Persist the intent BEFORE any side effect. Returns False if this
-        exact intent already exists (idempotent replay)."""
+        """Persist the intent BEFORE any side effect.
+
+        Returns False if this EXACT intent already exists (idempotent replay —
+        the deterministic client_order_id makes resubmission a no-op).
+
+        Raises SeqCollisionError if the row was rejected for any OTHER reason,
+        which in this schema means a different order already holds
+        (session_date, seq). INSERT OR IGNORE cannot tell those apart on its
+        own, and the caller cannot act safely on a bare False: the previous
+        code executed at the broker anyway and then updated zero ledger rows
+        (G-03).
+        """
         cur = self._conn.execute(
             """INSERT OR IGNORE INTO orders
                (client_order_id, session_date, strategy, occ_symbol, side, contracts,
@@ -149,7 +175,15 @@ class StateStore:
                 now.isoformat(),
             ),
         )
-        return cur.rowcount == 1
+        if cur.rowcount == 1:
+            return True
+        if self.order_status(intent.client_order_id) is not None:
+            return False  # same id already journaled: a legitimate replay
+        raise SeqCollisionError(
+            f"seq {intent.seq} on {intent.session_date} is already held by a different "
+            f"order; refusing to execute {intent.occ_symbol} {intent.side} without a "
+            "ledger row"
+        )
 
     def record_fill(
         self,
@@ -159,11 +193,17 @@ class StateStore:
         fill_cost_cents: int,
         commission_cents: int,
     ) -> None:
-        self._conn.execute(
+        cur = self._conn.execute(
             """UPDATE orders SET status='FILLED', filled_at=?, fill_premium_cents=?,
                fill_cost_cents=?, commission_cents=? WHERE client_order_id=?""",
             (now.isoformat(), fill_premium_cents, fill_cost_cents, commission_cents, coid),
         )
+        # A zero-row UPDATE means the broker executed against an order the
+        # ledger does not have. Saying nothing here is what let a position be
+        # committed with no order behind it, and reconcile() cannot repair that
+        # because it rebuilds only FROM order rows (G-03).
+        if cur.rowcount != 1:
+            raise UnknownOrderError(f"no ledger row for client_order_id={coid!r}")
 
     def reject_intents(self, coids: list[str]) -> None:
         """Retire rolled-back attempts (INTENT with no committed fill)."""

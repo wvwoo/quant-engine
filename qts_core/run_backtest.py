@@ -26,7 +26,7 @@ from qts_core.clock import (
     session_open_et,
     to_et,
 )
-from qts_core.config import StrategyConfig
+from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.money import fmt
 from qts_core.providers.yfinance_source import YFinanceSource
 
@@ -145,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     cfg = StrategyConfig()
+    require_paper_mode(cfg)  # BOOT gate: before the clock, the network, any output
     now = TradingClock.system().now_utc()
     sessions = build_sessions(args.symbol, args.days, cfg, now)
     if args.atm_iv != 0.20:
