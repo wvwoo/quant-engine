@@ -188,3 +188,124 @@ class TestPathHonesty:
     def test_drawdown_assumption_is_declared(self) -> None:
         res = run_backtest([make_session_data()], CFG)
         assert "REALIZED equity only" in res.assumptions["max_drawdown"]
+
+
+def _force_approvals(monkeypatch, cfg: StrategyConfig):  # type: ignore[no-untyped-def]
+    """Patch the checklist INSIDE backtest to approve every in-window bar.
+
+    These tests target the SAFETY rails, not the 7 gates — the gates have
+    their own suite. Forcing approval is the only way to produce the
+    multi-entry sessions the rails exist for without hand-sculpting bars
+    that thread all seven gates twice."""
+    import qts_core.backtest as bt
+    from qts_core.signals.checklist import ContractSelection, EntryDecision
+
+    def fake_evaluate_entry(view, cfg_, session_open_et):  # type: ignore[no-untyped-def]
+        q = view.chain[0]
+        sel = ContractSelection(
+            quote=q, delta=0.50, iv=0.68, iv_source="computed",
+            mid_cents=q.mid_cents or 1, spread_cents=q.spread_cents or 1, spread_bp=100,
+        )
+        return EntryDecision(
+            session_date=view.session_date, now_et="10:00", symbol="NVDA",
+            checks=(), approved=True, selection=sel, veto_reasons=(),
+        )
+
+    monkeypatch.setattr(bt, "evaluate_entry", fake_evaluate_entry)
+
+
+def _decaying_session() -> SessionData:
+    """Every entry stops out: a steady grind lower all session."""
+    bars: list[Bar] = []
+    price = 200.0
+    t = dt.datetime(2026, 6, 17, 9, 35, tzinfo=NY)
+    while t <= dt.datetime(2026, 6, 17, 15, 55, tzinfo=NY):
+        new = price - 0.9
+        bars.append(Bar(ts_close=t, open=price, high=price + 0.05, low=new - 0.05,
+                        close=new, volume=10_000))
+        price = new
+        t += dt.timedelta(minutes=5)
+    return SessionData(
+        session_date=SESSION, session_open_et=OPEN, force_flat_at=FLAT,
+        bars=tuple(bars),
+        prior_sessions=tuple(tuple(_prior_session(d)) for d in _prior_dates(20)),
+        symbol="NVDA", atm_iv=0.68,
+    )
+
+
+class TestSafetyRailsParity:
+    """N-04: the backtest measured a strategy that is NOT the one the paper
+    loop runs. paper.py enforces the two ADR-008 SAFETY rails — the daily loss
+    limit blocks re-entry, and realized losses shrink the next entry's capital
+    — while backtest.py sized every entry at the full mandate forever and
+    re-entered without limit. Three stop-outs in one backtest session booked
+    ~3x the loss the live loop would ever allow, and `assumptions` never said
+    so. That poisons net_pnl, win_rate, drawdown AND the Sharpe input."""
+
+    def test_daily_loss_limit_blocks_reentry(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        _force_approvals(monkeypatch, CFG)
+        # Precondition arm: with the limit effectively OFF, the decaying
+        # session re-enters after each stop — proving re-entry is reachable.
+        unlimited = StrategyConfig(commission_per_contract_cents=0, daily_loss_limit_cents=10**9)
+        trades_unlimited, _, _ = run_session(_decaying_session(), unlimited)
+        assert len(trades_unlimited) >= 2, "precondition: without a limit it re-enters"
+
+        limited = StrategyConfig(commission_per_contract_cents=0, daily_loss_limit_cents=1)
+        trades_limited, _, _ = run_session(_decaying_session(), limited)
+        assert len(trades_limited) == 1, (
+            "one stop-out breaches a 1c daily limit; a second entry means the "
+            "SAFETY rail is absent from the measured strategy"
+        )
+
+    def test_default_limit_stops_a_bad_day_after_one_loss(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The DEFAULT $212.50 limit binds on a realistic stop-out — this is
+        the ~3x-loss distortion N-04 measured, pinned at default config."""
+        _force_approvals(monkeypatch, CFG)
+        trades, _, _ = run_session(_decaying_session(), CFG)
+        assert len(trades) == 1
+        assert -trades[0].realized_pnl_cents >= CFG.daily_loss_limit_cents
+
+    def test_realized_losses_shrink_the_next_entry(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        _force_approvals(monkeypatch, CFG)
+        # Huge limit => re-entry allowed; sizing must still shrink (QTS-4).
+        cfg = StrategyConfig(commission_per_contract_cents=0, daily_loss_limit_cents=10_000_000)
+        trades, _, _ = run_session(_decaying_session(), cfg)
+        assert len(trades) >= 2
+        first, second = trades[0], trades[1]
+        assert first.realized_pnl_cents < 0
+        cost0 = first.cost_basis_per_contract_cents * first.contracts
+        cost1 = second.cost_basis_per_contract_cents * second.contracts
+        assert cost1 <= cost0, "capital did not shrink after a realized loss"
+        assert cost1 <= cfg.sub_portfolio_cents + first.realized_pnl_cents, (
+            "the second entry committed cash the session no longer had"
+        )
+
+    def test_parity_is_declared_in_assumptions(self) -> None:
+        res = run_backtest([make_session_data()], CFG)
+        assert "safety_rails" in res.assumptions
+        assert "daily loss limit" in res.assumptions["safety_rails"]
+
+
+class TestEntryQuoteIsTheQuote:
+    """N-11 / ADR-004: entry_quote_cents is documented as 'QUOTED ask at
+    decision time' and every risk LEVEL derives from it. The backtest was
+    passing the modeled next-bar-open MID — a FILL price with the spread
+    stripped — so every stop/target sat ~2c off what the live rule computes."""
+
+    def test_levels_derive_from_the_decision_ask(self) -> None:
+        from qts_core.backtest import _synthetic_chain
+
+        sess = make_session_data()
+        trades, _, _ = run_session(sess, CFG)
+        assert trades
+        t = trades[0]
+        # Reconstruct the decision-bar chain: the entry decision happened on
+        # the bar BEFORE the fill; its synthetic ask is the lawful quote.
+        asks = {
+            _synthetic_chain(sess, b.ts_close, b.close, CFG)[0].ask_cents
+            for b in sess.bars
+        }
+        assert t.entry_quote_cents in asks, (
+            "entry_quote_cents is not any decision-bar ASK — it is a fill "
+            "price, which conflates the two bases ADR-004 separates"
+        )
