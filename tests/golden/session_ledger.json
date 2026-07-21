@@ -1,0 +1,108 @@
+{
+  "decisions": [
+    {
+      "approved": true,
+      "decision": {
+        "approved": true,
+        "checks": [
+          {
+            "name": "trading_window",
+            "passed": true,
+            "reason": "inside entry window",
+            "threshold": "09:46-11:30 ET",
+            "value": "10:15 ET"
+          },
+          {
+            "name": "orb_breakout",
+            "passed": true,
+            "reason": "breakout above opening range",
+            "threshold": "close > ORB high",
+            "value": "close 204.22 vs ORB high 204.10"
+          },
+          {
+            "name": "vwap_alignment",
+            "passed": true,
+            "reason": "bullish expansion above VWAP",
+            "threshold": "close > session VWAP",
+            "value": "close 204.22 vs VWAP 203.86"
+          },
+          {
+            "name": "rvol",
+            "passed": true,
+            "reason": "volume expansion confirmed",
+            "threshold": ">= 2.0 (per_bar, N=20 of 20d)",
+            "value": "3.00"
+          },
+          {
+            "name": "rsi_non_overbought",
+            "passed": true,
+            "reason": "momentum not overbought",
+            "threshold": "< 70 (Wilder-14, ASSUMPTION)",
+            "value": "67.0"
+          },
+          {
+            "name": "macd_histogram",
+            "passed": true,
+            "reason": "MACD histogram positive",
+            "threshold": "> 0 (12/26/9, ASSUMPTION)",
+            "value": "0.0544"
+          },
+          {
+            "name": "contract_gates",
+            "passed": true,
+            "reason": "delta 0.4806 (computed IV 67.79%), spread 3c",
+            "threshold": "0DTE 0.45<=delta<=0.55, IV<95%, spread<=5c & <=350bp",
+            "value": "NVDA260617C00205000"
+          }
+        ],
+        "now_et": "2026-06-17 10:15 ET",
+        "selection": {
+          "delta": 0.480608,
+          "iv": 0.677903,
+          "iv_source": "computed",
+          "mid_cents": 132,
+          "occ": "NVDA260617C00205000",
+          "spread_cents": 3
+        },
+        "symbol": "NVDA"
+      },
+      "symbol": "NVDA"
+    }
+  ],
+  "entry_quote_cents": 134,
+  "orders": [
+    {
+      "cash_or_realized_cents": -81600,
+      "client_order_id": "6b7d9231-ce78-5ec1-8dcf-307c86b5aef1",
+      "contracts": 6,
+      "fill_premium_cents": 136,
+      "limit_cents": 134,
+      "reason": "ENTRY",
+      "seq": 0,
+      "side": "BUY",
+      "status": "FILLED"
+    },
+    {
+      "cash_or_realized_cents": 13300,
+      "client_order_id": "bbb5a308-9cb6-5442-826b-d6f7d4955a19",
+      "contracts": 1,
+      "fill_premium_cents": 269,
+      "limit_cents": 268,
+      "reason": "TRANCHE1",
+      "seq": 1,
+      "side": "SELL",
+      "status": "FILLED"
+    },
+    {
+      "cash_or_realized_cents": 45000,
+      "client_order_id": "b4113f2f-f0ea-504d-b0ab-658ac9618c79",
+      "contracts": 5,
+      "fill_premium_cents": 226,
+      "limit_cents": 240,
+      "reason": "TRAIL",
+      "seq": 2,
+      "side": "SELL",
+      "status": "FILLED"
+    }
+  ]
+}

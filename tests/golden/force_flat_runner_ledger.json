@@ -1,0 +1,34 @@
+{
+  "orders": [
+    {
+      "cash_or_realized_cents": -81600,
+      "contracts": 6,
+      "fill_premium_cents": 136,
+      "limit_cents": 134,
+      "reason": "ENTRY",
+      "seq": 0,
+      "side": "BUY",
+      "status": "FILLED"
+    },
+    {
+      "cash_or_realized_cents": 13300,
+      "contracts": 1,
+      "fill_premium_cents": 269,
+      "limit_cents": 268,
+      "reason": "TRANCHE1",
+      "seq": 1,
+      "side": "SELL",
+      "status": "FILLED"
+    },
+    {
+      "cash_or_realized_cents": 64000,
+      "contracts": 5,
+      "fill_premium_cents": 264,
+      "limit_cents": 268,
+      "reason": "FORCE_FLAT",
+      "seq": 2,
+      "side": "SELL",
+      "status": "FILLED"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "orders": [
+    {
+      "cash_or_realized_cents": -81600,
+      "contracts": 6,
+      "fill_premium_cents": 136,
+      "limit_cents": 134,
+      "reason": "ENTRY",
+      "seq": 0,
+      "side": "BUY",
+      "status": "FILLED"
+    },
+    {
+      "cash_or_realized_cents": -24000,
+      "contracts": 6,
+      "fill_premium_cents": 96,
+      "limit_cents": 100,
+      "reason": "STOP",
+      "seq": 1,
+      "side": "SELL",
+      "status": "FILLED"
+    }
+  ]
+}

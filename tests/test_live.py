@@ -1,0 +1,282 @@
+"""live.main() — the CLI that nothing exercised.
+
+qts_core/live.py measured 0.0% coverage: no test file imported it, so the B4
+halt, the provider-hiccup guard, the report write and the paper-mode gate were
+asserted only by their own docstrings — one of which (G-02) was false.
+
+Network stays off (pytest-socket, --disable-socket in pyproject): the provider
+and the clock are injected, never reached.
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import datetime as dt
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from qts_core import live
+from qts_core.clock import NY
+from qts_core.config import LiveTradingBlocked, StrategyConfig
+from qts_core.models import MarketView
+from qts_core.store import StateStore
+from tests.test_checklist import SESSION, make_view
+
+CFG = StrategyConfig(commission_per_contract_cents=0)
+NOW = dt.datetime(2026, 6, 17, 10, 15, tzinfo=NY)
+
+
+class FakeClock:
+    """The single source of 'now', frozen. Mirrors TradingClock's surface."""
+
+    @classmethod
+    def system(cls) -> FakeClock:
+        return cls()
+
+    def now_utc(self) -> dt.datetime:
+        return NOW.astimezone(dt.UTC)
+
+    def session_date(self) -> dt.date:
+        return SESSION
+
+
+class FakeSource:
+    """Stands in for YFinanceSource: same surface, no network."""
+
+    def __init__(self, symbol: str, has_expiry: bool = True, raises: bool = False) -> None:
+        self.symbol = symbol
+        self._has_expiry = has_expiry
+        self._raises = raises
+
+    def has_same_day_expiry(self, session_date: dt.date) -> bool:
+        return self._has_expiry
+
+    def build_view(self, *, now: dt.datetime, session_date: dt.date) -> MarketView:
+        if self._raises:
+            raise RuntimeError("provider hiccup")
+        return dc.replace(make_view(NOW), meta={"symbol": self.symbol})
+
+
+def _wire(
+    monkeypatch: pytest.MonkeyPatch,
+    factory: Callable[[str], object],
+    cfg: StrategyConfig = CFG,
+) -> None:
+    monkeypatch.setattr(live, "TradingClock", FakeClock)
+    monkeypatch.setattr(live, "YFinanceSource", factory)
+    monkeypatch.setattr(live, "StrategyConfig", lambda: cfg)
+
+
+class TestPaperModeGate:
+    """G-02: live.py claimed 'require_paper_mode() runs at import of the
+    session'. It does not — it runs inside PaperSession.__init__, which
+    live.main() never reaches if every symbol fails the B4 gate. The gate is
+    now called explicitly in main(), BEFORE any network I/O."""
+
+    def test_live_trading_config_is_refused_before_any_io(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        def exploding_source(symbol: str) -> FakeSource:  # pragma: no cover - never runs
+            raise AssertionError("provider was constructed before the paper-mode gate")
+
+        _wire(monkeypatch, exploding_source, cfg=StrategyConfig(live_trading=True))
+        monkeypatch.delenv("QTS_LIVE_TRADING_OWNER_ACK", raising=False)
+        with pytest.raises(LiveTradingBlocked):
+            live.main(["--db", str(tmp_path / "p.db")])
+
+    def test_gate_runs_even_when_every_symbol_is_halted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The old placement could be skipped entirely: with no 0DTE listed for
+        any symbol, no PaperSession was ever constructed."""
+        _wire(
+            monkeypatch,
+            lambda s: FakeSource(s, has_expiry=False),
+            cfg=StrategyConfig(live_trading=True),
+        )
+        monkeypatch.delenv("QTS_LIVE_TRADING_OWNER_ACK", raising=False)
+        with pytest.raises(LiveTradingBlocked):
+            live.main(["--db", str(tmp_path / "p.db"), "--symbols", "SPY"])
+
+
+class TestB4Gate:
+    def test_symbol_without_same_day_expiry_is_halted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s, has_expiry=False))
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--symbols", "NVDA"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no 0DTE expiry listed" in out
+        assert "B4 gate" in out
+
+    def test_non_trading_day_stops_before_the_provider(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class SaturdayClock(FakeClock):
+            def session_date(self) -> dt.date:
+                return dt.date(2026, 6, 20)  # a Saturday
+
+        monkeypatch.setattr(live, "TradingClock", SaturdayClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        rc = live.main(["--db", str(tmp_path / "p.db")])
+        assert rc == 0
+        assert "not an XNYS session" in capsys.readouterr().out
+
+
+class TestProviderResilience:
+    def test_one_symbol_raising_does_not_kill_the_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def factory(symbol: str) -> FakeSource:
+            return FakeSource(symbol, raises=(symbol == "QQQ"))
+
+        _wire(monkeypatch, factory)
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--symbols", "QQQ,NVDA"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[error] QQQ" in out
+        assert "--- NVDA ---" in out, "a hiccup on one symbol skipped the rest"
+
+
+class TestStepAndReport:
+    def test_step_runs_and_prints_the_reasoned_decision(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--symbols", "NVDA"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[view] NVDA" in out
+        assert "[decision] NVDA" in out
+        assert "rvol" in out, "per-gate reasoning must be printed, not just a verdict"
+
+    def test_report_is_written_when_asked(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        report = tmp_path / "r.md"
+        rc = live.main(
+            ["--db", str(tmp_path / "p.db"), "--symbols", "NVDA", "--report", str(report)]
+        )
+        assert rc == 0
+        text = report.read_text()
+        assert "QTS PAPER TRADING REPORT" in text
+        assert "MODELED FILLS" in text, "the honesty banner is not optional"
+
+    def test_symbols_defaults_to_the_configured_universe(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        live.main(["--db", str(tmp_path / "p.db")])
+        out = capsys.readouterr().out
+        for symbol in CFG.tickers:
+            assert f"--- {symbol} ---" in out
+
+
+class TestRailSurvivesProviderFailure:
+    """N-02: exit management lived ONLY inside session.step(view), and main()
+    skipped straight past it whenever the provider raised or the B4 gate went
+    false. The rail was therefore conditional on the exact data feed most
+    likely to be broken at the moment it matters — and yfinance throttling is
+    documented as expected, not exotic."""
+
+    def _holding(self, db: Path) -> None:
+        """Put a real open position in the ledger via the normal entry path."""
+        from qts_core.broker import PaperBroker
+        from qts_core.paper import PaperSession
+
+        s = PaperSession(
+            StateStore(db),
+            PaperBroker(CFG, CFG.tick_schedule_for("NVDA")),
+            CFG,
+            session_date=SESSION,
+            session_open_et=dt.datetime(2026, 6, 17, 9, 30, tzinfo=NY),
+            force_flat_at=dt.datetime(2026, 6, 17, 15, 30, tzinfo=NY),
+        )
+        r = s.step(make_view(NOW))
+        assert r.position is not None and r.position.contracts > 0
+        s.store.close()
+
+    def _late_clock(self) -> type[FakeClock]:
+        class LateClock(FakeClock):
+            def now_utc(self) -> dt.datetime:
+                return dt.datetime(2026, 6, 17, 15, 35, tzinfo=NY).astimezone(dt.UTC)
+
+        return LateClock
+
+    def test_provider_exception_does_not_strand_an_open_position(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        self._holding(db)
+        monkeypatch.setattr(live, "TradingClock", self._late_clock())
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, raises=True))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1, "the position was left unmanaged when the provider failed"
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+        assert store.open_positions() == {}
+
+    def test_b4_gate_going_false_does_not_strand_an_open_position(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "p.db"
+        self._holding(db)
+        monkeypatch.setattr(live, "TradingClock", self._late_clock())
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, has_expiry=False))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+
+    def test_before_force_flat_a_feed_failure_changes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The rail fires on time, not early: a feed failure at 10:15 must not
+        liquidate a healthy position."""
+        db = tmp_path / "p.db"
+        self._holding(db)
+        _wire(monkeypatch, lambda s: FakeSource(s, raises=True))
+        live.main(["--db", str(db), "--symbols", "NVDA"])
+        store = StateStore(db)
+        assert [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"] == []
+        assert store.open_positions() != {}
+
+
+class TestStepFailureIsContained:
+    """N-06: the provider call was guarded, but the step that owns position
+    state was not — so one symbol's sqlite error killed the whole pass, skipped
+    every remaining symbol, and left the report silently stale on disk."""
+
+    def test_one_symbol_step_failure_does_not_skip_the_rest(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import qts_core.paper as paper_mod
+
+        real_step = paper_mod.PaperSession.step
+        seen: list[str] = []
+
+        def flaky_step(self, view):  # type: ignore[no-untyped-def]
+            symbol = view.meta.get("symbol", "")
+            seen.append(symbol)
+            if symbol == "QQQ":
+                raise RuntimeError("database is locked")
+            return real_step(self, view)
+
+        monkeypatch.setattr(paper_mod.PaperSession, "step", flaky_step)
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        report = tmp_path / "r.md"
+        rc = live.main(
+            ["--db", str(tmp_path / "p.db"), "--symbols", "QQQ,NVDA", "--report", str(report)]
+        )
+        assert rc == 0
+        assert "NVDA" in seen, "a step failure on QQQ skipped every later symbol"
+        assert "[error] QQQ" in capsys.readouterr().out
+        assert report.exists(), "the report must still be written after a contained failure"

@@ -11,3 +11,8 @@ ruff
 
 # --- supply chain ---
 pip-audit
+
+# --- coverage gate: a repo floor AND a per-file floor (ci.sh). Added after
+# --- api.py/live.py/run_backtest.py were found sitting at exactly 0.0%.
+coverage
+httpx                # required by fastapi.testclient.TestClient
