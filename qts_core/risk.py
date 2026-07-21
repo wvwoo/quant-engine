@@ -96,12 +96,21 @@ class PositionState:
         return pct_level_cents(self.peak_premium_cents, -cfg.trailing_bp)
 
 
-def size_entry(cfg: StrategyConfig, ask_cents: int) -> SizedOrder:
+def size_entry(
+    cfg: StrategyConfig, ask_cents: int, schedule: TickSchedule, capital_cents: int | None = None
+) -> SizedOrder:
+    """Size an entry against EXECUTABLE cost on the symbol's tick grid.
+
+    ``capital_cents`` lets the caller shrink the mandate after realized losses
+    (finding QTS-4: sizing off a constant sub-portfolio commits cash the day
+    no longer has).
+    """
     n, unit, gross, residual = size_position(
-        cfg.sub_portfolio_cents,
+        cfg.sub_portfolio_cents if capital_cents is None else capital_cents,
         ask_cents,
         cfg.sizing_slippage_buffer_bp,
         cfg.commission_per_contract_cents,
+        schedule,
     )
     return SizedOrder(n, unit, gross, residual)
 

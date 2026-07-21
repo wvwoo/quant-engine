@@ -267,3 +267,28 @@ class TestSelectContract:
         sel, reasons = select_contract(make_view(), tight)
         assert sel is None
         assert any("IV" in r for r in reasons)
+
+
+class TestHalfDayExpiry:
+    """F1: time-to-expiry must follow the exchange calendar, not a constant."""
+
+    def test_half_day_t_is_shorter_than_full_day(self) -> None:
+        from qts_core.signals.checklist import _time_to_expiry_years
+
+        # Black Friday 2026-11-27 closes 13:00; a normal session closes 16:00.
+        half = dt.datetime(2026, 11, 27, 10, 0, tzinfo=NY)
+        full = dt.datetime(2026, 6, 17, 10, 0, tzinfo=NY)
+        t_half = _time_to_expiry_years(half, dt.date(2026, 11, 27))
+        t_full = _time_to_expiry_years(full, dt.date(2026, 6, 17))
+        assert t_half < t_full
+        # 3h vs 6h remaining -> the ratio is ~1/2, not ~1.
+        assert 0.45 < t_half / t_full < 0.55
+
+    def test_hardcoded_1600_would_have_doubled_it(self) -> None:
+        from qts_core.signals.checklist import _time_to_expiry_years
+
+        now = dt.datetime(2026, 11, 27, 10, 0, tzinfo=NY)
+        actual = _time_to_expiry_years(now, dt.date(2026, 11, 27))
+        naive_close = dt.datetime(2026, 11, 27, 16, 0, tzinfo=NY)
+        naive = (naive_close - now).total_seconds() / (365.0 * 24.0 * 3600.0)
+        assert naive > actual * 1.9

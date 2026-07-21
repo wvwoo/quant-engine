@@ -63,6 +63,7 @@ def rvol(
     session_bars: Sequence[Bar],
     prior_sessions: Sequence[Sequence[Bar]],
     now: dt.datetime,
+    lookback: int | None = None,
 ) -> float | None:
     """Relative volume, same-elapsed-time construction.
 
@@ -76,6 +77,10 @@ def rvol(
     """
     if not prior_sessions:
         return None
+    if lookback is not None:
+        # cfg.rvol_lookback_days was documented but never enforced: the mean
+        # ran over EVERY supplied session (finding F2).
+        prior_sessions = prior_sessions[-lookback:]
     cutoff = to_et(now).timetz()
     num = cumulative_volume(session_bars)
     baselines: list[int] = []

@@ -17,8 +17,10 @@ import datetime as dt
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from qts_core.broker import Broker, Fill
+from qts_core.clock import NY
 from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.models import MarketView
 from qts_core.money import CONTRACT_MULTIPLIER
@@ -69,6 +71,18 @@ def _pos_from_json(d: dict[str, object]) -> PositionState:
     )
 
 
+def _expiry_from_occ(occ: str) -> dt.date | None:
+    """Parse the YYMMDD block out of an OCC symbol (root + 6 date + R + 8)."""
+    if len(occ) < 15:
+        return None
+    body = occ[:-9]  # strip right + 8-digit strike
+    ymd = body[-6:]
+    try:
+        return dt.date(2000 + int(ymd[:2]), int(ymd[2:4]), int(ymd[4:6]))
+    except ValueError:
+        return None
+
+
 def _decision_blob(d: EntryDecision) -> str:
     return json.dumps(
         {
@@ -113,6 +127,9 @@ class PaperSession:
         self.session_date = session_date
         self.session_open_et = session_open_et
         self.force_flat_at = force_flat_at
+        # Recover at construction: a caller that only inspects state (never
+        # steps) must still see the truth the ledger records.
+        self.reconcile()
 
     # ------------------------------------------------------------ recovery
     def recover_position(self, occ_symbol: str) -> PositionState | None:
@@ -120,14 +137,114 @@ class PaperSession:
         return None if blob is None else _pos_from_json(blob)
 
     def any_open_position(self) -> PositionState | None:
-        for blob in self.store.open_positions().values():
+        """Open position for THIS session only.
+
+        A 0DTE contract from an earlier session has expired; carrying it
+        forward as tradeable would mark a worthless (or assigned) contract as
+        live forever (finding QTS-2). Stale rows are quarantined instead.
+        """
+        for occ, blob in self.store.open_positions().items():
+            if not occ.startswith("__"):
+                expiry = _expiry_from_occ(occ)
+                if expiry is not None and expiry < self.session_date:
+                    continue
             return _pos_from_json(blob)
         return None
+
+    def expired_positions(self) -> list[str]:
+        """Open rows whose 0DTE expiry has already passed — reported, never
+        silently settled: we do not own the data to price an assignment."""
+        out = []
+        for occ in self.store.open_positions():
+            expiry = _expiry_from_occ(occ)
+            if expiry is not None and expiry < self.session_date:
+                out.append(occ)
+        return sorted(out)
+
+    # ------------------------------------------------------------ reconciliation
+    def reconcile(self, now: dt.datetime | None = None) -> None:
+        """Rebuild positions from the ORDER LEDGER — the single source of truth.
+
+        A crash between ``record_fill`` and ``save_position`` leaves a FILLED
+        order with no matching position row. Without this, restart sees itself
+        as flat, ``next_seq`` has already advanced past the filled order, and
+        the replayed intent gets a NEW client_order_id — a genuine duplicate
+        order (found by 3 independent reviewers: QTS-1/QTS-2/QTS-R1).
+
+        Folding the ledger makes ``positions`` a derived cache: whatever the
+        crash timing, the rebuilt state matches the fills that actually
+        happened.
+        """
+        rows = self.store.orders_for_session(self.session_date)
+        if now is None:
+            # Timestamp is only the positions row's updated_at; the newest
+            # ledger entry is the honest stamp for a reconstruction.
+            stamps = [str(r["filled_at"] or r["created_at"]) for r in rows]
+            now = (
+                dt.datetime.fromisoformat(max(stamps))
+                if stamps
+                else dt.datetime.combine(self.session_date, dt.time(0, 0), tzinfo=NY)
+            )
+        by_symbol: dict[str, list[Any]] = {}
+        for row in rows:
+            if row["status"] != "FILLED":
+                continue
+            by_symbol.setdefault(row["occ_symbol"], []).append(row)
+
+        for occ, fills in by_symbol.items():
+            rebuilt = self._fold_fills(occ, sorted(fills, key=lambda r: int(r["seq"])))
+            if rebuilt is None:
+                continue
+            stored = self.store.load_position(occ)
+            if stored is not None:
+                # Never lower a persisted peak: the trail must not be loosened
+                # by a reconstruction that only sees fill prices.
+                stored_peak = stored.get("peak_premium_cents", 0)
+                peak = stored_peak if isinstance(stored_peak, int) else 0
+                rebuilt = dataclasses.replace(
+                    rebuilt,
+                    peak_premium_cents=max(rebuilt.peak_premium_cents, peak),
+                )
+                if _pos_to_json(rebuilt) == stored:
+                    continue  # already consistent
+            self.store.save_position(occ, _pos_to_json(rebuilt), now)
+
+    def _fold_fills(self, occ: str, fills: list[Any]) -> PositionState | None:
+        """Deterministic fold of one symbol's FILLED legs into a position."""
+        state: PositionState | None = None
+        for row in fills:
+            contracts = int(row["contracts"])
+            premium = int(row["fill_premium_cents"])
+            if row["side"] == "BUY":
+                state = open_position(
+                    symbol=occ[:-15] or occ,  # OCC: root + 6 date + 1 right + 8 strike
+                    occ_symbol=occ,
+                    contracts=contracts,
+                    entry_quote_cents=int(row["limit_cents"]),
+                    fill_cost_per_contract_cents=premium * CONTRACT_MULTIPLIER
+                    + self.cfg.commission_per_contract_cents,
+                )
+                continue
+            if state is None:
+                continue  # a SELL with no recorded BUY: nothing coherent to rebuild
+            remaining = max(state.contracts - contracts, 0)
+            realized = state.realized_pnl_cents + int(row["fill_cost_cents"] or 0)
+            phase = Phase.CLOSED if remaining == 0 else Phase.RUNNER
+            state = dataclasses.replace(
+                state,
+                contracts=remaining,
+                phase=phase,
+                peak_premium_cents=max(state.peak_premium_cents, premium),
+                realized_pnl_cents=realized,
+            )
+        return state
 
     # ------------------------------------------------------------ one step
     def step(self, view: MarketView) -> StepResult:
         """Advance the session by one market snapshot."""
         now = view.now
+        # Recovery BEFORE any decision: never act on a stale view of ourselves.
+        self.reconcile(now)
         realized_today = self.store.realized_pnl_today(self.session_date)
 
         pos = self.any_open_position()
@@ -148,7 +265,14 @@ class PaperSession:
             return StepResult(decision, (), None, None)
 
         sel = decision.selection
-        sized = size_entry(self.cfg, sel.quote.ask_cents)
+        # QTS-4: size against what the day still has, not a constant mandate.
+        capital = min(self.cfg.sub_portfolio_cents, self.cfg.sub_portfolio_cents + realized_today)
+        sized = size_entry(
+            self.cfg,
+            sel.quote.ask_cents,
+            self.cfg.tick_schedule_for(sel.quote.underlying),
+            capital,
+        )
         if sized.contracts == 0:
             return StepResult(decision, (), None, None)
 

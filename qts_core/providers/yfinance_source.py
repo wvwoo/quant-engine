@@ -29,7 +29,7 @@ def _clean_cents(value: object) -> int | None:
         f = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    if math.isnan(f) or math.isinf(f) or f < 0:
+    if not math.isfinite(f) or f < 0:
         return None
     try:
         return int(cents_from_quote(round(f, 2)))
@@ -163,7 +163,10 @@ class YFinanceSource:
         self, *, session_date: dt.date, now: dt.datetime, spot: float
     ) -> list[OptionQuote]:
         chain = self._ticker().option_chain(session_date.isoformat())
-        rows = [dict(r) for _, r in chain.calls.iterrows()]
+        calls = getattr(chain, "calls", None)
+        if calls is None or calls.empty:
+            return []  # listed expiry with an empty book: report, never crash
+        rows = [dict(r) for _, r in calls.iterrows()]
         return quotes_from_chain_rows(
             rows, underlying=self.symbol, expiry=session_date, right="C", now=now, spot=spot
         )

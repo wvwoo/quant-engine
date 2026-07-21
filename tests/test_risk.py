@@ -42,26 +42,39 @@ def nvda_position(contracts: int = 2) -> PositionState:
 
 
 class TestSizing:
-    def test_report_scenario(self) -> None:
+    def test_report_scenario_at_execution_prices(self) -> None:
+        # Commission-free (the report's own assumption): still 2 contracts,
+        # but priced at the tick-legal 425/share -> 42500/contract, so the
+        # residual is honestly $0.00 rather than the report's $1.60 (which
+        # came from rounding at contract granularity). See QTS-R2.
         cfg = StrategyConfig(commission_per_contract_cents=0)
-        s = size_entry(cfg, 420)
-        assert (s.contracts, s.buffered_cost_per_contract_cents) == (2, 42420)
-        assert (s.gross_committed_cents, s.residual_cents) == (84840, 160)
+        s = size_entry(cfg, 420, TickSchedule.PENNY_PROGRAM)
+        assert (s.contracts, s.buffered_cost_per_contract_cents) == (2, 42500)
+        assert (s.gross_committed_cents, s.residual_cents) == (85000, 0)
 
-    def test_default_commission_still_two_contracts(self) -> None:
-        s = size_entry(CFG, 420)  # 2*(42420+65)=84970 <= 85000
-        assert s.contracts == 2
-        assert s.residual_cents == 30
+    def test_default_commission_drops_to_one_contract(self) -> None:
+        # THE BUG: the old estimate said 2 contracts / $849.70 while the broker
+        # would charge $851.30 against an $850 mandate. Honest sizing takes 1.
+        s = size_entry(CFG, 420, TickSchedule.PENNY_PROGRAM)
+        assert s.contracts == 1
+        assert s.gross_committed_cents == 42565
+
+    def test_capital_shrinks_after_realized_loss(self) -> None:
+        # QTS-4: sizing must respect what the day still has.
+        full = size_entry(CFG, 200, TickSchedule.FULL_PENNY)
+        after_loss = size_entry(CFG, 200, TickSchedule.FULL_PENNY, capital_cents=40000)
+        assert after_loss.contracts < full.contracts
 
     def test_sizing_never_overspends_property(self) -> None:
-        # Sweep the premium range: gross must never exceed capital, and adding
-        # one more contract must always break the budget (maximality).
+        # Sweep premiums AND tick grids: gross never exceeds capital, and one
+        # more contract always breaks the budget (maximality).
         for ask in range(50, 4000, 7):
-            s = size_entry(CFG, ask)
-            assert s.gross_committed_cents <= CFG.sub_portfolio_cents
-            if s.contracts:
-                unit = s.buffered_cost_per_contract_cents + CFG.commission_per_contract_cents
-                assert (s.contracts + 1) * unit > CFG.sub_portfolio_cents
+            for tick in TickSchedule:
+                s = size_entry(CFG, ask, tick)
+                assert s.gross_committed_cents <= CFG.sub_portfolio_cents
+                if s.contracts:
+                    unit = s.buffered_cost_per_contract_cents + CFG.commission_per_contract_cents
+                    assert (s.contracts + 1) * unit > CFG.sub_portfolio_cents
 
 
 class TestExitLadder:

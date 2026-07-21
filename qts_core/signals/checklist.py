@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 
-from qts_core.clock import in_time_window, to_et
+from qts_core.clock import in_time_window, session_close_et, to_et
 from qts_core.config import StrategyConfig
 from qts_core.models import MarketView, OptionQuote
 from qts_core.pricing import analyze_contract
@@ -55,7 +55,13 @@ def _fmt(x: float | None, nd: int = 2) -> str:
 
 
 def _time_to_expiry_years(now_et: dt.datetime, expiry: dt.date) -> float:
-    close = dt.datetime.combine(expiry, dt.time(16, 0), tzinfo=now_et.tzinfo)
+    """Years to the ACTUAL session close, not a hardcoded 16:00.
+
+    On a half day the market closes 13:00; assuming 16:00 makes T roughly
+    twice its true value, inflating every modeled premium and quietly
+    defeating the IV and delta gates (finding F1).
+    """
+    close = session_close_et(expiry)
     seconds = max((close - now_et).total_seconds(), 60.0)
     return seconds / (365.0 * 24.0 * 3600.0)
 
@@ -184,7 +190,7 @@ def evaluate_entry(
         )
     )
 
-    rv = ind.rvol(view.bars, view.prior_sessions, view.now)
+    rv = ind.rvol(view.bars, view.prior_sessions, view.now, cfg.rvol_lookback_days)
     rvol_ok = rv is not None and rv >= cfg.rvol_min
     checks.append(
         CheckResult(

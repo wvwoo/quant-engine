@@ -105,21 +105,44 @@ def buffered_contract_cost_cents(premium_cents: int, buffer_bp: int) -> Cents:
     return Cents(_ceil_div(base * (BP + buffer_bp), BP))
 
 
+def executable_contract_cost_cents(
+    premium_cents: int, buffer_bp: int, schedule: TickSchedule
+) -> Cents:
+    """Worst-case cost of one contract AS THE BROKER WILL FILL IT.
+
+    The report's formula rounds at contract granularity; a real fill rounds
+    the per-SHARE price and snaps it UP to a legal tick. Sizing on the
+    cheaper contract-granularity figure commits capital that does not exist
+    (finding QTS-R2: $850 mandate, $851.30 actually charged).
+    """
+    if premium_cents <= 0:
+        raise MoneyError(f"premium must be positive: {premium_cents}")
+    per_share = _ceil_div(premium_cents * (BP + buffer_bp), BP)
+    legal = round_to_tick(per_share, schedule, "ceil")
+    return Cents(int(legal) * CONTRACT_MULTIPLIER)
+
+
 def size_position(
     capital_cents: int,
     premium_cents: int,
     buffer_bp: int,
     commission_per_contract_cents: int = 0,
+    schedule: TickSchedule | None = None,
 ) -> tuple[int, Cents, Cents, Cents]:
-    """Volumetric allocation: floor(capital / buffered cost), all-integer.
+    """Volumetric allocation: floor(capital / cost), all-integer.
 
-    Returns (contracts, buffered_cost_per_contract, gross_committed, residual).
-    Gross includes entry commissions; if commissions push gross past capital,
-    the count is reduced — never overspend.
+    Returns (contracts, cost_per_contract, gross_committed, residual).
+    With ``schedule`` the cost is the EXECUTABLE (tick-legal) one — the only
+    safe basis for committing capital. Without it, the report's own formula is
+    used, which is retained solely to reproduce the reference document.
     """
     if capital_cents <= 0:
         raise MoneyError(f"capital must be positive: {capital_cents}")
-    unit = buffered_contract_cost_cents(premium_cents, buffer_bp)
+    unit = (
+        buffered_contract_cost_cents(premium_cents, buffer_bp)
+        if schedule is None
+        else executable_contract_cost_cents(premium_cents, buffer_bp, schedule)
+    )
     n = capital_cents // unit
     while n > 0 and n * (unit + commission_per_contract_cents) > capital_cents:
         n -= 1

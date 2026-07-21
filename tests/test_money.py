@@ -176,3 +176,53 @@ class TestCommissionAndTicks:
 
     def test_bp_constant_sanity(self) -> None:
         assert BP == 10_000
+
+
+class TestExecutableCost:
+    """Sizing must price a contract the way the BROKER will actually fill it.
+
+    The report's formula rounds at CONTRACT granularity (420 x 1.01 -> 42420).
+    A real fill rounds the per-SHARE price and snaps it to a legal tick
+    (420 x 1.01 = 424.2 -> 425/share -> 42500/contract). Sizing on the cheaper
+    figure commits capital that does not exist (finding QTS-R2).
+    """
+
+    def test_executable_cost_exceeds_report_formula(self) -> None:
+        from qts_core.money import executable_contract_cost_cents
+
+        assert buffered_contract_cost_cents(420, 100) == 42420  # report's number
+        assert executable_contract_cost_cents(420, 100, TickSchedule.FULL_PENNY) == 42500
+
+    def test_executable_cost_respects_nickel_grid(self) -> None:
+        from qts_core.money import executable_contract_cost_cents
+
+        # 420 x 1.01 = 424.2 -> ceil 425; on the NICKEL grid (>=300 -> 10c)
+        # the next legal price is 430.
+        assert executable_contract_cost_cents(420, 100, TickSchedule.NICKEL) == 43000
+
+    def test_sizing_never_overspends_at_execution_prices(self) -> None:
+        from qts_core.money import executable_contract_cost_cents
+
+        commission = 65
+        for ask in range(50, 3000, 11):
+            for tick in TickSchedule:
+                n, _, gross, _ = size_position(85000, ask, 100, commission, tick)
+                if n == 0:
+                    continue
+                unit_cost = executable_contract_cost_cents(ask, 100, tick)
+                actual = n * (unit_cost + commission)
+                assert actual <= 85000, f"overspend ask={ask} tick={tick} n={n}"
+                assert gross == actual
+
+    def test_report_case_drops_to_one_contract_with_commission(self) -> None:
+        # The bug: estimate said 2 contracts / $849.70, execution charged
+        # $851.30 on an $850 mandate. Honest sizing takes 1.
+        n, unit, gross, residual = size_position(85000, 420, 100, 65, TickSchedule.PENNY_PROGRAM)
+        assert unit == 42500
+        assert (n, gross, residual) == (1, 42565, 42435)
+
+    def test_report_case_still_two_contracts_without_commission(self) -> None:
+        # Commission-free (the report's own assumption) the answer is unchanged
+        # at 2 contracts — but the residual is honestly $0.00, not $1.60.
+        n, unit, gross, residual = size_position(85000, 420, 100, 0, TickSchedule.PENNY_PROGRAM)
+        assert (n, unit, gross, residual) == (2, 42500, 85000, 0)

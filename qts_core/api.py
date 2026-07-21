@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
+from qts_core.clock import TradingClock
 from qts_core.config import PROVENANCE, StrategyConfig, require_paper_mode
 from qts_core.money import fmt
 from qts_core.store import StateStore
@@ -41,8 +42,16 @@ def _store() -> StateStore | None:
 
 
 def _session_date() -> dt.date:
+    """Today's EXCHANGE session date; QTS_SESSION_DATE pins it for demos/tests.
+
+    A hardcoded default silently served a stale session while the live runner
+    wrote to today's — the dashboard looked healthy and reported nothing
+    (finding QTS-1, live-api reviewer).
+    """
     raw = os.environ.get("QTS_SESSION_DATE")
-    return dt.date.fromisoformat(raw) if raw else dt.date(2026, 6, 17)
+    if raw:
+        return dt.date.fromisoformat(raw)
+    return TradingClock.system().session_date()
 
 
 @app.get("/")

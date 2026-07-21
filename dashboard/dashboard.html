@@ -166,10 +166,23 @@ function badge(text, cls) {
 }
 
 async function refresh() {
-  let ov;
   try {
-    ov = await (await fetch("/api/overview")).json();
-  } catch (e) { setConn(false, "تعذّر الوصول للخادم"); return; }
+    await refreshInner();
+  } catch (e) {
+    // QTS-4: only the FIRST fetch was guarded. A failure in any later call
+    // left stale tables under a green "connected" badge — a lying dashboard.
+    setConn(false, "انقطع أثناء التحديث");
+  }
+}
+
+async function getJSON(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+
+async function refreshInner() {
+  const ov = await getJSON("/api/overview");
   if (!ov.connected) { setConn(false, ov.reason); return; }
   setConn(true);
   $("mode").textContent = ov.mode;
@@ -183,7 +196,7 @@ async function refresh() {
   pnl.className = "val " + (ov.realized_pnl_today_cents > 0 ? "up" : ov.realized_pnl_today_cents < 0 ? "down" : "");
   drawEquity(ov.equity_points);
 
-  const ex = await (await fetch("/api/execution")).json();
+  const ex = await getJSON("/api/execution");
   const ordersBody = $("orders");
   while (ordersBody.firstChild) ordersBody.removeChild(ordersBody.firstChild);
   if (!ex.orders || !ex.orders.length) {
@@ -210,7 +223,7 @@ async function refresh() {
     }
   }
 
-  const sys = await (await fetch("/api/system")).json();
+  const sys = await getJSON("/api/system");
   const sb = $("system");
   while (sb.firstChild) sb.removeChild(sb.firstChild);
   sb.appendChild(row(["الوضع", sys.mode]));
@@ -218,7 +231,7 @@ async function refresh() {
   sb.appendChild(row(["قاعدة الحالة", sys.state_db.path + (sys.state_db.reachable ? " ✓" : " ✗")]));
   for (const [k, v] of Object.entries(sys.modules)) sb.appendChild(row([k, v]));
 
-  const rr = await (await fetch("/api/risk/rules")).json();
+  const rr = await getJSON("/api/risk/rules");
   const rb = $("rules");
   while (rb.firstChild) rb.removeChild(rb.firstChild);
   for (const r of rr.rules) {

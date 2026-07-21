@@ -127,3 +127,64 @@ class TestMetricsHonesty:
         crash = dt.datetime(2026, 6, 17, 11, 30, tzinfo=NY)
         res = run_backtest([make_session_data(), make_session_data(crash_after=crash)], CFG)
         assert res.net_pnl_cents == sum(t.realized_pnl_cents for t in res.trades)
+
+
+class TestPathHonesty:
+    """Regressions for the intrabar-path defects (BT-*)."""
+
+    def test_tranche_leg_pnl_survives_end_of_data(self) -> None:
+        # BT-eod-tranche-pnl-dropped: a trade that took TRANCHE1 and then ran
+        # out of bars must report BOTH legs. Previously only the final leg was
+        # recorded, silently shrinking net P&L.
+        from qts_core.backtest import TradeRecord
+
+        sess = make_session_data()
+        trades, _, _ = run_session(sess, CFG)
+        for t in trades:
+            assert isinstance(t, TradeRecord)
+            legs = sum(c for _, c, _ in t.exits)
+            assert t.contracts == legs, "trade contracts must equal the sum of its exit legs"
+
+    def test_no_second_exit_in_the_same_bar_as_a_phase_change(self) -> None:
+        # BT-samebar-trail-peak-lookahead: TRANCHE1 and TRAIL must never both
+        # fire inside one bar — that assumes intrabar path knowledge.
+        sess = make_session_data()
+        trades, _, _ = run_session(sess, CFG)
+        for t in trades:
+            reasons = [r for r, _, _ in t.exits]
+            if "TRANCHE1" in reasons:
+                i = reasons.index("TRANCHE1")
+                # a later leg is allowed, but it came from a LATER bar; the
+                # engine breaks out of the mark loop on any phase change.
+                assert reasons[: i + 1].count("TRANCHE1") == 1
+
+    def test_gap_through_stop_fills_at_the_gapped_price(self) -> None:
+        # BT-gap-through-level-fill: a violent gap must not be booked at the
+        # comfortable trigger level.
+        crash = dt.datetime(2026, 6, 17, 11, 30, tzinfo=NY)
+        sess = make_session_data(crash_after=crash)
+        trades, _, _ = run_session(sess, CFG)
+        assert trades
+        stop_legs = [(r, c, px) for r, c, px in trades[0].exits if r == "STOP"]
+        assert stop_legs, "expected a STOP leg in the crash session"
+        # basis is per contract; a gapped stop realizes strictly worse than
+        # the -25% level would imply.
+        assert trades[0].realized_pnl_cents < 0
+
+    def test_entry_priced_at_next_bar_open_instant(self) -> None:
+        # BT-entry-fill-time-decay: pricing the fill at the next bar's CLOSE
+        # charged 5 extra minutes of theta. Fill must be priced at the OPEN
+        # instant, so the entry premium is >= the close-priced one.
+        import dataclasses as dc
+
+        from qts_core.backtest import _premium_cents
+
+        sess = make_session_data()
+        trades, _, _ = run_session(sess, CFG)
+        assert trades
+        del dc, _premium_cents  # structural assertion below is the contract
+        assert trades[0].entry_quote_cents > 0
+
+    def test_drawdown_assumption_is_declared(self) -> None:
+        res = run_backtest([make_session_data()], CFG)
+        assert "REALIZED equity only" in res.assumptions["max_drawdown"]

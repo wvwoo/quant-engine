@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS orders (
     filled_at       TEXT,
     fill_premium_cents   INTEGER,
     fill_cost_cents      INTEGER,
-    commission_cents     INTEGER
+    commission_cents     INTEGER,
+    -- Two sessions racing on one db would both read the same next_seq and one
+    -- would silently overwrite the other. Make the collision an error, not a
+    -- lost order (finding QTS-3).
+    UNIQUE (session_date, seq)
 );
 CREATE TABLE IF NOT EXISTS positions (
     occ_symbol      TEXT PRIMARY KEY,

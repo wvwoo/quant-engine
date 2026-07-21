@@ -60,7 +60,7 @@ def render_session_report(store: StateStore, cfg: StrategyConfig, session_date: 
         add("")
 
     if approved:
-        payload = json.loads(approved[0][3])
+        payload = json.loads(approved[-1][3])  # heading says LAST (finding RPT-*)
         add("### Last approved decision — full checklist")
         add("")
         add("| Check | Value | Threshold | Status |")

@@ -24,7 +24,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 
-from qts_core.clock import NY
+from qts_core.clock import session_close_et
 from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
 from qts_core.money import BP, CONTRACT_MULTIPLIER
@@ -75,7 +75,8 @@ class BacktestResult:
 
 
 def _t_years(now: dt.datetime, session_date: dt.date) -> float:
-    close = dt.datetime.combine(session_date, dt.time(16, 0), tzinfo=NY)
+    """Years to the ACTUAL close (half days end 13:00) — see finding F1."""
+    close = session_close_et(session_date)
     return max((close - now).total_seconds(), 60.0) / (365.0 * 24.0 * 3600.0)
 
 
@@ -121,6 +122,7 @@ def run_session(
     position = None
     strike_cents = 0
     realized = 0
+    trade_realized = 0
     exits: list[tuple[str, int, int]] = []
 
     for i, bar in enumerate(sess.bars):
@@ -139,16 +141,22 @@ def run_session(
                     bar.close, strike, now, sess.session_date, sess.atm_iv, cfg.risk_free_rate
                 ),
             )
+            phase_before = position.phase
             for mark in marks:
                 position, orders = evaluate(position, mark, now, sess.force_flat_at, cfg, tick)
                 for o in orders:
+                    # BT-gap-through-level-fill: when the bar gapped THROUGH the
+                    # trigger, the fill is the gapped price, not the level we
+                    # wished for. Selling always takes the worse of the two.
+                    fill_px = min(o.trigger_premium_cents, mark)
                     pnl = (
-                        o.trigger_premium_cents * CONTRACT_MULTIPLIER * o.contracts
+                        fill_px * CONTRACT_MULTIPLIER * o.contracts
                         - position.cost_basis_per_contract_cents * o.contracts
                         - cfg.commission_per_contract_cents * o.contracts
                     )
                     realized += pnl
-                    exits.append((o.reason.value, o.contracts, o.trigger_premium_cents))
+                    trade_realized += pnl
+                    exits.append((o.reason.value, o.contracts, fill_px))
                 if position.phase is Phase.CLOSED:
                     trades.append(
                         TradeRecord(
@@ -158,11 +166,19 @@ def run_session(
                             entry_quote_cents=position.entry_quote_cents,
                             cost_basis_per_contract_cents=(position.cost_basis_per_contract_cents),
                             exits=tuple(exits),
-                            realized_pnl_cents=realized - sum(t.realized_pnl_cents for t in trades),
+                            realized_pnl_cents=trade_realized,
                         )
                     )
                     position = None
                     exits = []
+                    trade_realized = 0
+                    break
+                if position.phase is not phase_before:
+                    # BT-samebar-trail-peak-lookahead: a phase change mid-bar
+                    # (e.g. TRANCHE1 at the bar HIGH) must NOT be followed by
+                    # judging the runner against another mark from the SAME
+                    # bar — that assumes knowledge of the intrabar path. The
+                    # runner is evaluated from the next bar onward.
                     break
             equity_marks.append((now, realized))
             continue
@@ -186,17 +202,18 @@ def run_session(
             continue
         signals += 1
         sel = decision.selection
-        sized = size_entry(cfg, sel.quote.ask_cents)
+        sized = size_entry(cfg, sel.quote.ask_cents, tick)
         if sized.contracts == 0:
             equity_marks.append((now, realized))
             continue
         # Fill at NEXT bar open + slippage (never this bar's close).
         next_bar = sess.bars[i + 1]
         strike_cents = sel.quote.strike_cents
+        fill_at = next_bar.ts_close - dt.timedelta(minutes=cfg.bar_interval_min)
         fill_premium = _premium_cents(
             next_bar.open,
             strike_cents / 100.0,
-            next_bar.ts_close,
+            fill_at,  # the bar's OPEN instant — not its close (extra theta)
             sess.session_date,
             sess.atm_iv,
             cfg.risk_free_rate,
@@ -231,16 +248,20 @@ def run_session(
             - cfg.commission_per_contract_cents * position.contracts
         )
         realized += pnl
+        trade_realized += pnl
         exits.append(("END_OF_DATA", position.contracts, mark))
         trades.append(
             TradeRecord(
                 session_date=sess.session_date,
                 occ_symbol=position.occ_symbol,
-                contracts=position.contracts,
+                contracts=sum(c for _, c, _ in exits),
                 entry_quote_cents=position.entry_quote_cents,
                 cost_basis_per_contract_cents=position.cost_basis_per_contract_cents,
                 exits=tuple(exits),
-                realized_pnl_cents=pnl,
+                # BT-eod-tranche-pnl-dropped: this trade's EARLIER legs (e.g. a
+                # TRANCHE1 sale) belong to it too; recording only the final leg
+                # silently shrank net P&L.
+                realized_pnl_cents=trade_realized,
             )
         )
     return trades, signals, equity_marks
@@ -300,6 +321,8 @@ def run_backtest(sessions: list[SessionData], cfg: StrategyConfig) -> BacktestRe
             "entry_fill": f"next bar open +{cfg.sizing_slippage_buffer_bp}bp slippage, tick-legal",
             "intrabar_path": "conservative: stop at bar low evaluated before target at bar high",
             "commission": f"{cfg.commission_per_contract_cents}c/contract/side",
+            "max_drawdown": "computed on REALIZED equity only; open-position "
+            "mark-to-market excursions are not included (understates intraday DD)",
         },
         sessions=len(sessions),
         signal_count=signal_count,

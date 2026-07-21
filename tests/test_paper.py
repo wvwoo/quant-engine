@@ -3,6 +3,7 @@ kill-9 resume contract, and the safety halts."""
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 from pathlib import Path
 
@@ -231,3 +232,108 @@ class TestFixtureRoundtrip:
         assert len(views) == 1
         assert views[0].bars == view.bars
         assert views[0].chain == view.chain
+
+
+class TestCrashBetweenFillAndSave:
+    """The window the original TestKill9Resume did NOT cover.
+
+    step() order is: journal_intent -> broker.execute -> record_fill ->
+    save_position. A crash BETWEEN record_fill and save_position leaves a
+    FILLED order with no position row. On restart the session sees itself as
+    flat, while next_seq has already advanced past the filled order — so the
+    replayed intent gets a DIFFERENT client_order_id and becomes a genuine
+    second order. Found independently by 3 reviewers (QTS-1/QTS-2/QTS-R1).
+    """
+
+    def _crash_after_fill(self, db: Path, view_factory) -> None:  # type: ignore[no-untyped-def]
+        """Run one step but die right after record_fill."""
+        s = make_session(db)
+        original_save = s.store.save_position
+
+        def die(*_a: object, **_k: object) -> None:
+            raise KeyboardInterrupt("simulated kill -9 after record_fill")
+
+        s.store.save_position = die  # type: ignore[method-assign]
+        with contextlib.suppress(KeyboardInterrupt):
+            s.step(view_factory())
+        del original_save
+        s.store.close()
+
+    def test_entry_not_duplicated_after_crash(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        self._crash_after_fill(db, make_view)
+
+        s2 = make_session(db)
+        buys_before = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY"]
+        assert len(buys_before) == 1
+        assert buys_before[0]["status"] == "FILLED"
+
+        # Restart + step: the filled entry must be recognised, NOT re-issued.
+        s2.step(make_view())
+        buys_after = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY"]
+        assert len(buys_after) == 1, "restart issued a duplicate entry order"
+
+        pos = s2.any_open_position()
+        assert pos is not None, "filled entry was lost — position not recovered"
+        assert pos.contracts == buys_before[0]["contracts"]
+
+    def test_recovered_basis_matches_the_actual_fill(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        self._crash_after_fill(db, make_view)
+        s2 = make_session(db)
+        order = next(o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY")
+        pos = s2.any_open_position()
+        assert pos is not None
+        expected = order["fill_premium_cents"] * 100 + CFG.commission_per_contract_cents
+        assert pos.cost_basis_per_contract_cents == expected
+
+    def test_exit_not_duplicated_after_crash(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        s = make_session(db)
+        r = s.step(make_view())
+        assert r.position is not None
+        stop = r.position.stop_level(CFG)
+
+        # crash right after the SELL fill is recorded
+        def die(*_a: object, **_k: object) -> None:
+            raise KeyboardInterrupt("simulated kill -9 after record_fill")
+
+        exit_view = TestExitFlow()._view_with_mark(stop - 2, et(10, 30))
+        s.store.save_position = die  # type: ignore[method-assign]
+        with contextlib.suppress(KeyboardInterrupt):
+            s.step(exit_view)
+        s.store.close()
+
+        s2 = make_session(db)
+        s2.step(exit_view)
+        sells = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1, "restart issued a duplicate exit order"
+        pos = s2.any_open_position()
+        assert pos is None, "position should be closed after the recovered STOP"
+
+
+class TestStalePositionQuarantine:
+    """QTS-2: a 0DTE position from an earlier session has EXPIRED."""
+
+    def test_yesterdays_position_is_not_live(self, tmp_path: Path) -> None:
+        s = make_session(tmp_path / "s.db")
+        stale = {
+            "symbol": "NVDA",
+            "occ_symbol": "NVDA260616C00205000",
+            "phase": "OPEN",
+            "contracts": 2,
+            "entry_quote_cents": 420,
+            "cost_basis_per_contract_cents": 42420,
+            "peak_premium_cents": 420,
+            "realized_pnl_cents": 0,
+        }
+        s.store.save_position("NVDA260616C00205000", stale, et(10, 0))
+        assert s.any_open_position() is None, "expired contract treated as live"
+        assert s.expired_positions() == ["NVDA260616C00205000"]
+
+    def test_todays_position_is_live(self, tmp_path: Path) -> None:
+        s = make_session(tmp_path / "s.db")
+        r = s.step(make_view())
+        assert r.position is not None
+        assert s.any_open_position() is not None
+        assert s.expired_positions() == []

@@ -8,6 +8,7 @@ construction error, not a code-review hope (findings LA-*).
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -42,7 +43,9 @@ class Bar:
         require_aware(self.ts_close)
         for name in ("open", "high", "low", "close"):
             v: float = getattr(self, name)
-            if v != v or v <= 0:
+            # NaN, inf and non-positive are all corrupt: inf slipped through
+            # the original `v != v` check (finding F4).
+            if not math.isfinite(v) or v <= 0:
                 raise DataQualityError(f"bar {name} invalid: {v!r} @ {self.ts_close}")
         if not (self.low <= self.open <= self.high and self.low <= self.close <= self.high):
             raise DataQualityError(f"bar OHLC disordered @ {self.ts_close}")
