@@ -38,6 +38,8 @@ class Broker(Protocol):
         self, intent: OrderIntent, bid_cents: int, ask_cents: int, now: dt.datetime
     ) -> Fill: ...
 
+    def execute_unmarked_exit(self, intent: OrderIntent, now: dt.datetime) -> Fill: ...
+
 
 class PaperExecutionError(RuntimeError):
     pass
@@ -76,6 +78,31 @@ class PaperBroker:
             premium_cents=int(premium),
             cost_cents=int(cash),
             commission_cents=commission,
+            filled_at=now,
+            modeled=True,
+        )
+        self._fills[intent.client_order_id] = fill
+        return fill
+
+    def execute_unmarked_exit(self, intent: OrderIntent, now: dt.datetime) -> Fill:
+        """Liquidate a position we cannot price — WORST CASE, by construction.
+
+        ``execute`` refuses a bid<=0 book, which is correct for a discretionary
+        order and catastrophic for the force-flat rail: the one moment the rail
+        must fire is the moment the contract stops being quotable (G-01). This
+        path exists only for that rail. Proceeds are ZERO — we do not own data
+        to price an untradeable contract, and zero can only understate the
+        result, never flatter it. Commission is still charged, because assuming
+        it away would be the optimistic direction.
+        """
+        prior = self._fills.get(intent.client_order_id)
+        if prior is not None:
+            return prior
+        fill = Fill(
+            client_order_id=intent.client_order_id,
+            premium_cents=0,
+            cost_cents=0,
+            commission_cents=self._cfg.commission_per_contract_cents * intent.contracts,
             filled_at=now,
             modeled=True,
         )

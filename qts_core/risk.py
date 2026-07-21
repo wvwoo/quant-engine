@@ -51,6 +51,10 @@ class ExitReason(Enum):
     TRANCHE1 = "TRANCHE1"
     TRAIL = "TRAIL"
     FORCE_FLAT = "FORCE_FLAT"
+    # Force-flat with NO usable mark: the contract left the chain or has no
+    # market. Distinct from FORCE_FLAT because it is booked at worst-case
+    # zero proceeds, and must never be read as a real market fill (G-01).
+    FORCE_FLAT_UNMARKED = "FORCE_FLAT_UNMARKED"
     DAILY_LOSS_LIMIT = "DAILY_LOSS_LIMIT"
 
 

@@ -25,6 +25,7 @@ from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.models import MarketView
 from qts_core.money import CONTRACT_MULTIPLIER
 from qts_core.risk import (
+    ExitReason,
     Phase,
     PositionState,
     evaluate,
@@ -329,8 +330,17 @@ class PaperSession:
         now = view.now
         quote = next((q for q in view.chain if q.occ_symbol == pos.occ_symbol), None)
         if quote is None or quote.mid_cents is None:
-            # No usable mark: state unchanged; report the data gap loudly.
-            return StepResult(None, (), pos, halted=None)
+            # No usable mark. Before force-flat there is nothing to act on, but
+            # the gap is REPORTED (halted), not swallowed.
+            #
+            # After force-flat it is the opposite: the rail MUST still fire.
+            # This early return used to cover both cases, so FORCE_FLAT — the
+            # only guard against carrying a 0DTE contract past the close
+            # (ADR-008 / B3) — was skipped in exactly the situation it exists
+            # for: a contract that stopped being quotable near the close (G-01).
+            if now < self.force_flat_at:
+                return StepResult(None, (), pos, halted="NO_MARK")
+            return self._force_flat_unmarked(pos, view)
         tick = self.cfg.tick_schedule_for(pos.symbol)
         new_state, exit_orders = evaluate(
             pos, quote.mid_cents, now, self.force_flat_at, self.cfg, tick
@@ -377,6 +387,50 @@ class PaperSession:
         if -self.store.realized_pnl_today(self.session_date) >= self.cfg.daily_loss_limit_cents:
             halt = "DAILY_LOSS_LIMIT"
         return StepResult(None, tuple(fills), new_state, halt)
+
+    def _force_flat_unmarked(self, pos: PositionState, view: MarketView) -> StepResult:
+        """Force-flat a position that cannot be priced (G-01).
+
+        Booked at worst-case ZERO proceeds through a DISTINCT reason, so the
+        ledger never lets it be mistaken for a real market fill. Carrying the
+        contract instead would leave a 0DTE position past the close, which is
+        the specific hazard ADR-008 added the rail to prevent.
+        """
+        now = view.now
+        reason = ExitReason.FORCE_FLAT_UNMARKED.value
+        seq = self.store.next_seq(self.session_date)
+        coid = client_order_id(
+            STRATEGY_ID, self.session_date, pos.occ_symbol, f"SELL-{reason}", seq
+        )
+        intent = OrderIntent(
+            client_order_id=coid,
+            session_date=self.session_date,
+            strategy=STRATEGY_ID,
+            occ_symbol=pos.occ_symbol,
+            side="SELL",
+            contracts=pos.contracts,
+            limit_cents=0,  # no market to limit against; the fill is worst-case
+            reason=reason,
+            seq=seq,
+        )
+        self.store.journal_intent(intent, now)
+        fill = self.broker.execute_unmarked_exit(intent, now)
+        realized = (
+            fill.premium_cents * CONTRACT_MULTIPLIER * pos.contracts
+            - pos.cost_basis_per_contract_cents * pos.contracts
+            - fill.commission_cents
+        )
+        new_state = dataclasses.replace(
+            pos,
+            phase=Phase.CLOSED,
+            contracts=0,
+            realized_pnl_cents=pos.realized_pnl_cents + realized,
+        )
+        with self.store.transaction():
+            self.store.record_fill(coid, now, fill.premium_cents, realized, fill.commission_cents)
+            self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
+        self._snapshot(view, new_state)
+        return StepResult(None, (fill,), new_state, halted=reason)
 
     def _snapshot(self, view: MarketView, pos: PositionState | None) -> None:
         realized = self.store.realized_pnl_today(self.session_date)

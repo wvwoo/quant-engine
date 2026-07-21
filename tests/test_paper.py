@@ -394,3 +394,76 @@ class TestSharedCapitalAcrossSymbols:
         stop = r.position.stop_level(CFG)
         r2 = nvda.step(TestExitFlow()._view_with_mark(stop - 2, et(10, 30)))
         assert r2.position is not None and r2.position.phase is Phase.CLOSED
+
+
+class TestForceFlatWithoutMark:
+    """G-01: the ONLY guard against carrying a 0DTE contract past the close is
+    FORCE_FLAT, and it lived behind an early return that fired exactly when the
+    contract went untradeable. A contract vanishing from the chain near the
+    close is precisely when the rail matters most, so 'no mark' must never mean
+    'no action' after force-flat time."""
+
+    def _entered(self, tmp_path: Path) -> PaperSession:
+        s = make_session(tmp_path / "s.db")
+        r = s.step(make_view())
+        assert r.position is not None
+        return s
+
+    def _view_without_the_contract(self, now: dt.datetime):  # type: ignore[no-untyped-def]
+        """The held contract has DISAPPEARED from the chain entirely."""
+        import dataclasses as dc
+
+        view = make_view(now)
+        return dc.replace(view, chain=view.chain[1:])
+
+    def _view_with_no_market(self, now: dt.datetime):  # type: ignore[no-untyped-def]
+        """The contract is listed but bid=ask=0 — 'no market', which
+        PaperBroker refuses to execute against by construction."""
+        import dataclasses as dc
+
+        view = make_view(now)
+        q = view.chain[0]
+        dead = dc.replace(q, bid_cents=0, ask_cents=0, received_at=now)
+        return dc.replace(view, chain=(dead, *view.chain[1:]))
+
+    def test_force_flat_fires_when_contract_vanished(self, tmp_path: Path) -> None:
+        s = self._entered(tmp_path)
+        r = s.step(self._view_without_the_contract(et(15, 30)))
+        assert r.position is not None and r.position.phase is Phase.CLOSED, (
+            "force-flat was skipped because the contract left the chain"
+        )
+        sells = [o for o in s.store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+
+    def test_force_flat_fires_when_there_is_no_market(self, tmp_path: Path) -> None:
+        s = self._entered(tmp_path)
+        r = s.step(self._view_with_no_market(et(15, 30)))
+        assert r.position is not None and r.position.phase is Phase.CLOSED
+        sells = [o for o in s.store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+
+    def test_unmarked_force_flat_books_worst_case_zero_proceeds(self, tmp_path: Path) -> None:
+        """We do not own data to price an untradeable contract. Booking it at
+        zero can only UNDERSTATE the result — never flatter it."""
+        s = self._entered(tmp_path)
+        pos = s.any_open_position()
+        assert pos is not None
+        basis = pos.cost_basis_per_contract_cents * pos.contracts
+        s.step(self._view_without_the_contract(et(15, 30)))
+        sells = [o for o in s.store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert sells[0]["fill_premium_cents"] == 0
+        assert s.store.realized_pnl_today(SESSION) == -basis
+
+    def test_missing_mark_before_force_flat_reports_the_gap(self, tmp_path: Path) -> None:
+        """Before force-flat a missing mark is not actionable — but it must be
+        REPORTED, not swallowed. The docstring promised 'loudly'; halted=None
+        was silent."""
+        s = self._entered(tmp_path)
+        before = s.any_open_position()
+        r = s.step(self._view_without_the_contract(et(10, 30)))
+        assert r.halted == "NO_MARK"
+        assert r.fills == ()
+        after = s.any_open_position()
+        assert after == before, "state must be unchanged when there is no mark"
