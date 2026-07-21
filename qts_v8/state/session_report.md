@@ -8,7 +8,7 @@
 ## 🌐 TELEMETRY & ROUTING METADATA
 * **Session Date:** `2026-07-21`
 * **Engine:** `qts-core v0.1.0 / paper`
-* **Decisions Evaluated:** `6`
+* **Decisions Evaluated:** `18`
 * **Orders (journaled/filled):** `0`
 
 ## 🔍 ENTRY CHECKLIST AUDIT
@@ -21,6 +21,18 @@
 | 11:13 | QQQ | 🔴 VETOED | rvol |
 | 15:08 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
 | 15:08 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram |
+| 15:23 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:23 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram |
+| 15:23 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:23 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram |
+| 15:24 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:24 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram |
+| 15:25 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:25 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:26 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:26 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:27 | SPY | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
+| 15:27 | QQQ | 🔴 VETOED | trading_window, rvol, macd_histogram, contract_gates |
 
 ## 🛡️ RISK PARAMETERS IN FORCE
 
@@ -38,7 +50,7 @@
 
 * **Realized P&L today:** **$0.00**
 * **Cash:** $850.00 | **Open position value (mark):** $0.00
-* **Equity snapshots:** 1
+* **Equity snapshots:** 7
 
 ---
 *Assumptions: paper fills at quote±100bp, commission 65c/contract/side, marks at option mid. Cherry-picking of sessions is prohibited; this report covers one full session as recorded in the state store.*

@@ -16,13 +16,31 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 from qts_core.backtest import BacktestResult
 from qts_core.clock import to_et
 from qts_core.money import fmt
 
-DEFAULT_DIR = Path("qts_v8/state/backtests")
+
+def default_dir() -> Path:
+    """Where artifacts live, resolved WITHOUT depending on the process cwd.
+
+    A relative default looked fine until the API was served by a process whose
+    cwd was not the repo root: /api/backtest then reported "no saved backtest"
+    with total confidence while the file sat on disk. A confident false
+    negative is worse than an error, so the path is anchored to this package
+    (the same trick api.py already uses for the dashboard file) and overridable
+    by QTS_BACKTEST_DIR, mirroring QTS_DB.
+    """
+    override = os.environ.get("QTS_BACKTEST_DIR")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent / "qts_v8" / "state" / "backtests"
+
+
+DEFAULT_DIR = default_dir()
 
 MODELED_BANNER = (
     "MODELED — options premiums are Black-Scholes on synthetic quotes, NOT real "
@@ -134,10 +152,10 @@ def write_artifacts(
     days: int,
     atm_iv: float,
     generated_at: dt.datetime,
-    directory: Path | str = DEFAULT_DIR,
+    directory: Path | str | None = None,
 ) -> tuple[Path, Path]:
     """Write <stem>.json and <stem>.md. Returns both paths."""
-    out = Path(directory)
+    out = Path(directory) if directory is not None else default_dir()
     out.mkdir(parents=True, exist_ok=True)
     payload = to_payload(res, symbol=symbol, days=days, atm_iv=atm_iv, generated_at=generated_at)
     stem = artifact_stem(symbol, days, generated_at)
@@ -150,10 +168,10 @@ def write_artifacts(
     return json_path, md_path
 
 
-def latest_payload(directory: Path | str = DEFAULT_DIR) -> dict[str, object] | None:
+def latest_payload(directory: Path | str | None = None) -> dict[str, object] | None:
     """Most recent saved result, or None. Ordering is by the deterministic
     filename stamp, never by filesystem mtime."""
-    out = Path(directory)
+    out = Path(directory) if directory is not None else default_dir()
     if not out.exists():
         return None
     files = sorted(out.glob("*.json"))

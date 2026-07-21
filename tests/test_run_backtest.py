@@ -182,19 +182,19 @@ class TestArtifacts:
     def test_no_artifacts_are_written_while_the_flag_is_off(
         self, wired: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("QTS_BACKTEST_DIR", str(tmp_path / "arts"))
         rb.main(["--symbol", "SPY", "--days", "30"])
-        assert not (tmp_path / "qts_v8" / "state" / "backtests").exists()
+        assert not (tmp_path / "arts").exists()
 
     def test_enabled_flag_writes_tagged_json_and_markdown(
         self, wired: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("QTS_BACKTEST_DIR", str(tmp_path / "arts"))
         monkeypatch.setattr(
             rb, "StrategyConfig", lambda: dataclasses.replace(CFG, backtest_artifacts=True)
         )
         rb.main(["--symbol", "SPY", "--days", "30"])
-        out = tmp_path / "qts_v8" / "state" / "backtests"
+        out = tmp_path / "arts"
         payloads = sorted(out.glob("*.json"))
         markdowns = sorted(out.glob("*.md"))
         assert len(payloads) == 1 and len(markdowns) == 1
@@ -218,3 +218,60 @@ class TestArtifacts:
         stamp = dt.datetime(2026, 6, 17, 16, 5, tzinfo=NY)
         assert artifact_stem("spy", 30, stamp) == artifact_stem("SPY", 30, stamp)
         assert artifact_stem("SPY", 30, stamp) == "SPY-30d-20260617T160500"
+
+
+class TestArtifactDirIsCwdIndependent:
+    """Found by RUNNING it: the API was served by a process whose cwd was not
+    the repo root, so /api/backtest reported "no saved backtest" with complete
+    confidence while the file sat on disk. A confident false negative reads as
+    a fact, which is worse than an error."""
+
+    def test_default_dir_does_not_move_with_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from qts_core.artifacts import default_dir
+
+        monkeypatch.delenv("QTS_BACKTEST_DIR", raising=False)
+        here = default_dir()
+        monkeypatch.chdir(tmp_path)
+        assert default_dir() == here, "artifact path drifted with the process cwd"
+        assert here.is_absolute()
+
+    def test_env_override_is_honoured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from qts_core.artifacts import default_dir
+
+        monkeypatch.setenv("QTS_BACKTEST_DIR", str(tmp_path / "elsewhere"))
+        assert default_dir() == tmp_path / "elsewhere"
+
+    def test_written_artifact_is_found_from_a_different_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from qts_core.artifacts import latest_payload, write_artifacts
+        from qts_core.backtest import BacktestResult
+
+        monkeypatch.setenv("QTS_BACKTEST_DIR", str(tmp_path / "arts"))
+        res = BacktestResult(
+            modeled=True,
+            assumptions={},
+            sessions=1,
+            signal_count=0,
+            trades=(),
+            net_pnl_cents=0,
+            win_rate=None,
+            profit_factor=None,
+            max_drawdown_cents=0,
+            sharpe=None,
+        )
+        write_artifacts(
+            res,
+            symbol="SPY",
+            days=30,
+            atm_iv=0.20,
+            generated_at=dt.datetime(2026, 6, 17, 16, 0, tzinfo=NY),
+        )
+        monkeypatch.chdir(tmp_path / "arts")  # serve from somewhere else entirely
+        found = latest_payload()
+        assert found is not None, "a saved artifact was reported as missing"
+        assert found["symbol"] == "SPY"
