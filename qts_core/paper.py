@@ -176,6 +176,13 @@ class PaperSession:
         happened.
         """
         rows = self.store.orders_for_session(self.session_date)
+        # An INTENT with no fill is a rolled-back attempt: the fill and the
+        # position commit together, so if the fill is absent it never happened.
+        # Retire it so it cannot be mistaken for an in-flight order.
+        orphans = [r["client_order_id"] for r in rows if r["status"] == "INTENT"]
+        if orphans:
+            self.store.reject_intents(orphans)
+            rows = self.store.orders_for_session(self.session_date)
         if now is None:
             # Timestamp is only the positions row's updated_at; the newest
             # ledger entry is the honest stamp for a reconstruction.
@@ -292,11 +299,6 @@ class PaperSession:
         # Journal BEFORE side effect; a replayed step is a no-op + reconcile.
         self.store.journal_intent(intent, now)
         fill = self.broker.execute(intent, sel.quote.bid_cents, sel.quote.ask_cents, now)
-        # For BUY legs fill_cost_cents stores the signed cash flow.
-        self.store.record_fill(
-            coid, now, fill.premium_cents, fill.cost_cents, fill.commission_cents
-        )
-
         pos = open_position(
             symbol=sel.quote.underlying,
             occ_symbol=sel.quote.occ_symbol,
@@ -305,7 +307,14 @@ class PaperSession:
             fill_cost_per_contract_cents=fill.premium_cents * CONTRACT_MULTIPLIER
             + self.cfg.commission_per_contract_cents,
         )
-        self.store.save_position(pos.occ_symbol, _pos_to_json(pos), now)
+        # Fill + position in ONE transaction: a crash between them can no
+        # longer leave a FILLED order without its position (QTS-2).
+        with self.store.transaction():
+            # For BUY legs fill_cost_cents stores the signed cash flow.
+            self.store.record_fill(
+                coid, now, fill.premium_cents, fill.cost_cents, fill.commission_cents
+            )
+            self.store.save_position(pos.occ_symbol, _pos_to_json(pos), now)
         self._snapshot(view, pos)
         return StepResult(decision, (fill,), pos, None)
 
@@ -320,6 +329,7 @@ class PaperSession:
             pos, quote.mid_cents, now, self.force_flat_at, self.cfg, tick
         )
         fills: list[Fill] = []
+        pending: list[tuple[str, int, int, int]] = []  # (coid, premium, realized, commission)
         for order in exit_orders:
             seq = self.store.next_seq(self.session_date)
             coid = client_order_id(
@@ -344,12 +354,17 @@ class PaperSession:
                 - fill.commission_cents
             )
             # For SELL legs fill_cost_cents stores the signed REALIZED P&L.
-            self.store.record_fill(coid, now, fill.premium_cents, realized, fill.commission_cents)
+            pending.append((coid, fill.premium_cents, realized, fill.commission_cents))
             fills.append(fill)
             new_state = dataclasses.replace(
                 new_state, realized_pnl_cents=new_state.realized_pnl_cents + realized
             )
-        self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
+        # Every exit fill AND the resulting position state commit together: a
+        # crash can no longer sell the position twice on restart (QTS-R1).
+        with self.store.transaction():
+            for coid_, premium_, realized_, commission_ in pending:
+                self.store.record_fill(coid_, now, premium_, realized_, commission_)
+            self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
         self._snapshot(view, new_state)
         halt = None
         if -self.store.realized_pnl_today(self.session_date) >= self.cfg.daily_loss_limit_cents:

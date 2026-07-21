@@ -259,32 +259,30 @@ class TestCrashBetweenFillAndSave:
         del original_save
         s.store.close()
 
-    def test_entry_not_duplicated_after_crash(self, tmp_path: Path) -> None:
-        db = tmp_path / "s.db"
-        self._crash_after_fill(db, make_view)
-
-        s2 = make_session(db)
-        buys_before = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY"]
-        assert len(buys_before) == 1
-        assert buys_before[0]["status"] == "FILLED"
-
-        # Restart + step: the filled entry must be recognised, NOT re-issued.
-        s2.step(make_view())
-        buys_after = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY"]
-        assert len(buys_after) == 1, "restart issued a duplicate entry order"
-
-        pos = s2.any_open_position()
-        assert pos is not None, "filled entry was lost — position not recovered"
-        assert pos.contracts == buys_before[0]["contracts"]
-
-    def test_recovered_basis_matches_the_actual_fill(self, tmp_path: Path) -> None:
+    def test_crashed_entry_rolls_back_leaving_no_fill(self, tmp_path: Path) -> None:
+        # Fill + position commit together, so a crash between them rolls the
+        # fill back: from the ledger's view the order never executed.
         db = tmp_path / "s.db"
         self._crash_after_fill(db, make_view)
         s2 = make_session(db)
-        order = next(o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY")
+        buys = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "BUY"]
+        assert [o["status"] for o in buys] == ["REJECTED"]
+        assert s2.any_open_position() is None
+
+    def test_exactly_one_filled_entry_after_crash_and_restart(self, tmp_path: Path) -> None:
+        db = tmp_path / "s.db"
+        self._crash_after_fill(db, make_view)
+        s2 = make_session(db)
+        s2.step(make_view())  # legitimate retry of an attempt that never executed
+        filled = [
+            o
+            for o in s2.store.orders_for_session(SESSION)
+            if o["side"] == "BUY" and o["status"] == "FILLED"
+        ]
+        assert len(filled) == 1, "more than one entry actually executed"
         pos = s2.any_open_position()
         assert pos is not None
-        expected = order["fill_premium_cents"] * 100 + CFG.commission_per_contract_cents
+        expected = filled[0]["fill_premium_cents"] * 100 + CFG.commission_per_contract_cents
         assert pos.cost_basis_per_contract_cents == expected
 
     def test_exit_not_duplicated_after_crash(self, tmp_path: Path) -> None:
@@ -306,10 +304,15 @@ class TestCrashBetweenFillAndSave:
 
         s2 = make_session(db)
         s2.step(exit_view)
-        sells = [o for o in s2.store.orders_for_session(SESSION) if o["side"] == "SELL"]
-        assert len(sells) == 1, "restart issued a duplicate exit order"
+        filled_sells = [
+            o
+            for o in s2.store.orders_for_session(SESSION)
+            if o["side"] == "SELL" and o["status"] == "FILLED"
+        ]
+        assert len(filled_sells) == 1, "the position was sold twice"
+        assert sum(o["contracts"] for o in filled_sells) == 6, "sold more than we owned"
         pos = s2.any_open_position()
-        assert pos is None, "position should be closed after the recovered STOP"
+        assert pos is None, "position should be closed after the STOP"
 
 
 class TestStalePositionQuarantine:

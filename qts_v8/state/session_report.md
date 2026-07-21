@@ -15,7 +15,7 @@
 
 | Time | Symbol | Verdict | Failed checks |
 | :--- | :--- | :--- | :--- |
-| 14:14 | SPY | 🔴 VETOED | orb_breakout, vwap_alignment, rvol |
+| 14:45 | SPY | 🔴 VETOED | orb_breakout, rvol |
 
 ## 🛡️ RISK PARAMETERS IN FORCE
 

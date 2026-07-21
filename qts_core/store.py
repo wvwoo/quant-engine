@@ -17,10 +17,12 @@ mechanisms deliver it:
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,7 +95,11 @@ class OrderIntent:
 
 class StateStore:
     def __init__(self, path: str | Path) -> None:
-        self._conn = sqlite3.connect(str(path), isolation_level=None)  # autocommit off via BEGIN
+        # autocommit: each statement commits on its own. The comment here
+        # previously claimed "autocommit off via BEGIN" while no BEGIN was ever
+        # issued — a false promise the reviewers caught. Multi-statement
+        # atomicity is now explicit via the transaction() context manager.
+        self._conn = sqlite3.connect(str(path), isolation_level=None)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA fullfsync=ON")  # F_FULLFSYNC on macOS/APFS
@@ -102,6 +108,24 @@ class StateStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        """All-or-nothing for a group of writes.
+
+        Defence-in-depth for the fill->save window (QTS-R1/QTS-1/QTS-2): with
+        the fill and the position update in ONE transaction, a crash rolls
+        back to the INTENT state instead of leaving a FILLED order with no
+        position. ``reconcile()`` still repairs any pre-existing inconsistency;
+        this simply stops new ones from being created.
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
 
     # ---------------------------------------------------------- orders
     def journal_intent(self, intent: OrderIntent, now: dt.datetime) -> bool:
@@ -139,6 +163,13 @@ class StateStore:
             """UPDATE orders SET status='FILLED', filled_at=?, fill_premium_cents=?,
                fill_cost_cents=?, commission_cents=? WHERE client_order_id=?""",
             (now.isoformat(), fill_premium_cents, fill_cost_cents, commission_cents, coid),
+        )
+
+    def reject_intents(self, coids: list[str]) -> None:
+        """Retire rolled-back attempts (INTENT with no committed fill)."""
+        self._conn.executemany(
+            "UPDATE orders SET status='REJECTED' WHERE client_order_id=? AND status='INTENT'",
+            [(c,) for c in coids],
         )
 
     def unfilled_intents(self) -> list[str]:
