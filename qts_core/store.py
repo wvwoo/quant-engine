@@ -128,27 +128,49 @@ class StateStore:
         self._conn.execute("PRAGMA fullfsync=ON")  # F_FULLFSYNC on macOS/APFS
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._in_txn = False  # nesting guard; see transaction()
 
     def close(self) -> None:
         self._conn.close()
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
-        """All-or-nothing for a group of writes.
+        """All-or-nothing for a group of writes — INCLUDING its own failures.
 
         Defence-in-depth for the fill->save window (QTS-R1/QTS-1/QTS-2): with
         the fill and the position update in ONE transaction, a crash rolls
         back to the INTENT state instead of leaving a FILLED order with no
         position. ``reconcile()`` still repairs any pre-existing inconsistency;
         this simply stops new ones from being created.
+
+        Hardened per N-07 — the original shape broke its own promise twice:
+        - COMMIT sat outside the try, so a COMMIT failure (full disk,
+          SQLITE_BUSY) propagated with the write transaction still OPEN. Every
+          later ``transaction()`` then died with "cannot start a transaction
+          within a transaction" while the WAL write lock starved other
+          processes. COMMIT failure now rolls back before re-raising.
+        - ROLLBACK inside the except block was unguarded, so its own failure
+          REPLACED the original exception and destroyed the diagnosis. It is
+          now suppressed; the original error is what surfaces.
+        - Nesting raised sqlite's cryptic message mid-write; it now fails
+          immediately with a clear one, before any statement runs.
         """
+        if self._in_txn:
+            raise RuntimeError(
+                "StateStore.transaction() is not reentrant: a transaction is "
+                "already open on this connection"
+            )
         self._conn.execute("BEGIN IMMEDIATE")
+        self._in_txn = True
         try:
             yield
+            self._conn.execute("COMMIT")
         except BaseException:
-            self._conn.execute("ROLLBACK")
+            with contextlib.suppress(sqlite3.Error):
+                self._conn.execute("ROLLBACK")
             raise
-        self._conn.execute("COMMIT")
+        finally:
+            self._in_txn = False
 
     # ---------------------------------------------------------- orders
     def journal_intent(self, intent: OrderIntent, now: dt.datetime) -> bool:

@@ -78,6 +78,18 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(args.db)
 
+    # N-03: a position that expired without a closing order is invisible to
+    # realized P&L (which sums SELL legs). The operator must SEE it, every
+    # run, until it is resolved — not discover it in a disagreeing equity row.
+    stranded = store.expired_positions(as_of=session_date)
+    for occ in sorted(stranded):
+        state = stranded[occ]
+        print(
+            f"[WARN] {occ}: expired UNSETTLED — "
+            f"{state.get('contracts')} contract(s), basis not in realized P&L. "
+            "Owner action required."
+        )
+
     for symbol in symbols:
         print(f"--- {symbol} ---")
         # The session is built BEFORE the provider is consulted, because the

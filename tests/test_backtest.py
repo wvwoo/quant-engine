@@ -203,12 +203,22 @@ def _force_approvals(monkeypatch, cfg: StrategyConfig):  # type: ignore[no-untyp
     def fake_evaluate_entry(view, cfg_, session_open_et):  # type: ignore[no-untyped-def]
         q = view.chain[0]
         sel = ContractSelection(
-            quote=q, delta=0.50, iv=0.68, iv_source="computed",
-            mid_cents=q.mid_cents or 1, spread_cents=q.spread_cents or 1, spread_bp=100,
+            quote=q,
+            delta=0.50,
+            iv=0.68,
+            iv_source="computed",
+            mid_cents=q.mid_cents or 1,
+            spread_cents=q.spread_cents or 1,
+            spread_bp=100,
         )
         return EntryDecision(
-            session_date=view.session_date, now_et="10:00", symbol="NVDA",
-            checks=(), approved=True, selection=sel, veto_reasons=(),
+            session_date=view.session_date,
+            now_et="10:00",
+            symbol="NVDA",
+            checks=(),
+            approved=True,
+            selection=sel,
+            veto_reasons=(),
         )
 
     monkeypatch.setattr(bt, "evaluate_entry", fake_evaluate_entry)
@@ -221,15 +231,19 @@ def _decaying_session() -> SessionData:
     t = dt.datetime(2026, 6, 17, 9, 35, tzinfo=NY)
     while t <= dt.datetime(2026, 6, 17, 15, 55, tzinfo=NY):
         new = price - 0.9
-        bars.append(Bar(ts_close=t, open=price, high=price + 0.05, low=new - 0.05,
-                        close=new, volume=10_000))
+        bars.append(
+            Bar(ts_close=t, open=price, high=price + 0.05, low=new - 0.05, close=new, volume=10_000)
+        )
         price = new
         t += dt.timedelta(minutes=5)
     return SessionData(
-        session_date=SESSION, session_open_et=OPEN, force_flat_at=FLAT,
+        session_date=SESSION,
+        session_open_et=OPEN,
+        force_flat_at=FLAT,
         bars=tuple(bars),
         prior_sessions=tuple(tuple(_prior_session(d)) for d in _prior_dates(20)),
-        symbol="NVDA", atm_iv=0.68,
+        symbol="NVDA",
+        atm_iv=0.68,
     )
 
 
@@ -301,10 +315,7 @@ class TestEntryQuoteIsTheQuote:
         t = trades[0]
         # Reconstruct the decision-bar chain: the entry decision happened on
         # the bar BEFORE the fill; its synthetic ask is the lawful quote.
-        asks = {
-            _synthetic_chain(sess, b.ts_close, b.close, CFG)[0].ask_cents
-            for b in sess.bars
-        }
+        asks = {_synthetic_chain(sess, b.ts_close, b.close, CFG)[0].ask_cents for b in sess.bars}
         assert t.entry_quote_cents in asks, (
             "entry_quote_cents is not any decision-bar ASK — it is a fill "
             "price, which conflates the two bases ADR-004 separates"

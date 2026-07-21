@@ -100,10 +100,25 @@ class StrategyConfig:
     )
 
     def tick_schedule_for(self, symbol: str) -> TickSchedule:
-        # Unknown symbols get the coarsest schedule — misclassifying a nickel
-        # class as penny produces unfillable prices; the reverse only costs
-        # granularity. Fail conservative.
-        return self.tick_schedules.get(symbol.upper(), TickSchedule.NICKEL)
+        """Tick schedule for a symbol — KNOWN symbols only; unknown ones raise.
+
+        The old behaviour silently guessed NICKEL and claimed the guess "only
+        costs granularity". Measured falsification (N-08): NICKEL's tick is 5c
+        below $3, and round_to_tick(..., "floor") sends any sell-side price of
+        1-4 cents to ZERO — so a misclassified penny-program symbol (AAPL is
+        one) books a fabricated 100% loss at force-flat and journals a $0.00
+        fill for a leg that filled. In a system whose product is honest
+        numbers, a wrong guess that corrupts money is strictly worse than a
+        loud refusal (the central rule: no unstated guessing).
+        """
+        try:
+            return self.tick_schedules[symbol.upper()]
+        except KeyError:
+            raise KeyError(
+                f"no tick schedule for {symbol.upper()!r}: add it to "
+                "StrategyConfig.tick_schedules (with provenance) before trading "
+                "it — guessing a schedule can floor sell prices to $0.00"
+            ) from None
 
 
 PROVENANCE: dict[str, tuple[Tier, str]] = {

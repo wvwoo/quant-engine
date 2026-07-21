@@ -98,3 +98,44 @@ class TestRenderingBranches:
         report = render_session_report(store, CFG, SESSION)
         assert "ORDER LEDGER (MODELED FILLS)" in report
         assert "FILLED" in report
+
+
+class TestExpiredUnsettledAreReported:
+    """N-03: expired_positions() promised 'reported, never silently settled'
+    while NOTHING in production called it. The money half is worse: realized
+    P&L sums SELL legs only, so a position that never sold vanishes from the
+    day's P&L entirely — the report printed $0.00 while the basis was gone.
+    We do not own assignment data, so no settlement is fabricated; the report
+    now states the unaccounted basis instead of hiding it."""
+
+    STALE = "NVDA260616C00205000"  # expired the day before SESSION
+
+    def _store_with_stale_row(self, tmp_path: Path) -> StateStore:
+        store = StateStore(tmp_path / "s.db")
+        store.save_position(
+            self.STALE,
+            {
+                "symbol": "NVDA",
+                "occ_symbol": self.STALE,
+                "phase": "OPEN",
+                "contracts": 6,
+                "entry_quote_cents": 420,
+                "cost_basis_per_contract_cents": 42485,
+                "peak_premium_cents": 420,
+                "realized_pnl_cents": 0,
+            },
+            dt.datetime(2026, 6, 16, 15, 0, tzinfo=NY),
+        )
+        return store
+
+    def test_report_names_the_row_and_the_unaccounted_basis(self, tmp_path: Path) -> None:
+        report = render_session_report(self._store_with_stale_row(tmp_path), CFG, SESSION)
+        assert "EXPIRED / UNSETTLED" in report
+        assert self.STALE in report
+        # 6 * 42485 = 254910c committed and NOT in realized P&L
+        assert "$2549.10" in report
+        assert "NOT reflected" in report
+
+    def test_clean_session_has_no_scare_section(self, tmp_path: Path) -> None:
+        report = render_session_report(StateStore(tmp_path / "c.db"), CFG, SESSION)
+        assert "EXPIRED / UNSETTLED" not in report
