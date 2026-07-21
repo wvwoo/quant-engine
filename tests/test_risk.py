@@ -167,7 +167,7 @@ class TestPnlAccounting:
         assert pnl == 84000 - 42420 == 41580
 
     def test_commission_reduces_pnl(self) -> None:
-        with_fee = realized_pnl_cents(nvda_position(), 840, 1, 65)
+        with_fee = realized_pnl_cents(nvda_position(), 840, 1, 65)  # 1 contract: total==rate
         assert with_fee == 41580 - 65
 
     def test_contract_multiplier_present(self) -> None:
@@ -206,3 +206,15 @@ class TestLevelSweep:
         assert stop < quote < floor < target
         assert stop == quote * 75 // 100
         assert target == quote * 2
+
+
+class TestCommissionIsTheFillsTotal:
+    """Review F4: the function takes the leg's TOTAL commission (from the
+    fill), not a per-contract rate. The two coincided only because PaperBroker
+    derives its commission from the same config; the Broker protocol permits
+    fills that differ, and a cfg-based figure would silently diverge from what
+    record_fill journals."""
+
+    def test_total_is_subtracted_once_not_per_contract(self) -> None:
+        two = realized_pnl_cents(nvda_position(), 840, 2, 130)
+        assert two == 840 * 100 * 2 - nvda_position().cost_basis_per_contract_cents * 2 - 130

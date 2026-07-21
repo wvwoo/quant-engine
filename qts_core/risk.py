@@ -193,12 +193,20 @@ def realized_pnl_cents(
     state: PositionState,
     exit_premium_cents: int,
     contracts: int,
-    commission_per_contract_cents: int,
+    commission_cents: int,
 ) -> int:
-    """P&L for an exit leg off the ACTUAL basis (ADR-004), commissions included."""
+    """P&L for an exit leg off the ACTUAL basis (ADR-004), commissions included.
+
+    ``commission_cents`` is the TOTAL commission for the leg, taken from the
+    FILL — not a per-contract rate from config. Review F4: the two were equal
+    only because PaperBroker derives its commission from the same config
+    object; the Broker protocol permits fills whose commission differs, and
+    a cfg-based figure here would silently diverge from the commission the
+    ledger journals via record_fill.
+    """
     proceeds = exit_premium_cents * CONTRACT_MULTIPLIER * contracts
     cost = state.cost_basis_per_contract_cents * contracts
-    return proceeds - cost - commission_per_contract_cents * contracts
+    return proceeds - cost - commission_cents
 
 
 def daily_loss_breached(realized_today_cents: int, cfg: StrategyConfig) -> bool:

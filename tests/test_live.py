@@ -352,3 +352,62 @@ class TestStrandedWarningSurvivesWeekends:
         db = tmp_path / "never" / "p.db"
         assert live.main(["--db", str(db)]) == 0
         assert not db.exists(), "a warning pass must not create state"
+
+
+class TestConfigGapDoesNotStrandItsOwnPosition:
+    """Review F2 (confirmed at HEAD): the KeyError containment `continue`d
+    BEFORE the session was built, so the unconfigured symbol's OWN open
+    position lost its exits AND its force-flat — a config problem stranding a
+    position, which ADR-008 forbids. The unmarked force-flat needs no tick
+    schedule at all, so a strand-free handling was always available."""
+
+    def _open_position_for(self, db: Path, symbol: str, occ: str) -> None:
+        store = StateStore(db)
+        store.save_position(
+            occ,
+            {
+                "symbol": symbol,
+                "occ_symbol": occ,
+                "phase": "OPEN",
+                "contracts": 2,
+                "entry_quote_cents": 420,
+                "cost_basis_per_contract_cents": 42400,
+                "peak_premium_cents": 420,
+                "realized_pnl_cents": 0,
+            },
+            dt.datetime(2026, 6, 17, 10, 30, tzinfo=NY),
+        )
+        store.close()
+
+    def test_unconfigured_symbol_still_force_flats_after_the_bell(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        occ = "AAPL260617C00200000"  # today's expiry, position opened earlier
+        self._open_position_for(db, "AAPL", occ)
+
+        class LateClock(FakeClock):
+            def now_utc(self) -> dt.datetime:
+                return dt.datetime(2026, 6, 17, 15, 35, tzinfo=NY).astimezone(dt.UTC)
+
+        monkeypatch.setattr(live, "TradingClock", LateClock)
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        rc = live.main(["--db", str(db), "--symbols", "AAPL"])
+        assert rc == 0
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1, "the config gap stranded the symbol's own position"
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+        assert store.open_positions(as_of=SESSION) == {}
+
+    def test_before_the_bell_the_position_is_left_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "p.db"
+        occ = "AAPL260617C00200000"
+        self._open_position_for(db, "AAPL", occ)
+        _wire(monkeypatch, lambda s: FakeSource(s))  # clock at 10:15
+        live.main(["--db", str(db), "--symbols", "AAPL"])
+        store = StateStore(db)
+        assert [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"] == []

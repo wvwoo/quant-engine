@@ -31,6 +31,7 @@ from qts_core.clock import (
     session_open_et,
 )
 from qts_core.config import StrategyConfig, require_paper_mode
+from qts_core.money import TickSchedule
 from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
@@ -111,6 +112,27 @@ def main(argv: list[str] | None = None) -> int:
             tick = cfg.tick_schedule_for(symbol)
         except KeyError as exc:
             print(f"[error] {symbol}: {exc.args[0]}")
+            # Review F2: `continue` alone stranded the symbol's OWN open
+            # position — a config problem must never leave a 0DTE contract
+            # unmanaged (ADR-008). The unmarked force-flat books zero
+            # proceeds and NEVER touches the tick schedule, so the rescue
+            # session's placeholder schedule is provably irrelevant to the
+            # only operation reachable from here.
+            rescue = PaperSession(
+                store,
+                PaperBroker(cfg, TickSchedule.FULL_PENNY),  # placeholder; unused
+                cfg,
+                session_date=session_date,
+                session_open_et=session_open_et(session_date),
+                force_flat_at=force_flat,
+                symbol=symbol,
+            )
+            forced = _guarded(symbol, rescue.force_flat_if_due, now)
+            if forced is not None and forced.fills:
+                print(
+                    f"[force-flat/UNMARKED] {symbol}: liquidated at worst-case "
+                    "zero proceeds — symbol has no tick schedule"
+                )
             continue
         # The session is built BEFORE the provider is consulted, because the
         # safety rail must not depend on the data feed (N-02): a throttled or

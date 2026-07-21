@@ -159,7 +159,10 @@ def run_session(
                     # wished for. Selling always takes the worse of the two.
                     fill_px = min(o.trigger_premium_cents, mark)
                     pnl = realized_pnl_cents(
-                        position, fill_px, o.contracts, cfg.commission_per_contract_cents
+                        position,
+                        fill_px,
+                        o.contracts,
+                        cfg.commission_per_contract_cents * o.contracts,
                     )
                     realized += pnl
                     trade_realized += pnl
@@ -264,7 +267,10 @@ def run_session(
             cfg.risk_free_rate,
         )
         pnl = realized_pnl_cents(
-            position, mark, position.contracts, cfg.commission_per_contract_cents
+            position,
+            mark,
+            position.contracts,
+            cfg.commission_per_contract_cents * position.contracts,
         )
         realized += pnl
         trade_realized += pnl

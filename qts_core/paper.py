@@ -384,7 +384,7 @@ class PaperSession:
             self.store.journal_intent(intent, now)
             fill = self.broker.execute(intent, quote.bid_cents, quote.ask_cents, now)
             realized = realized_pnl_cents(
-                pos, fill.premium_cents, order.contracts, self.cfg.commission_per_contract_cents
+                pos, fill.premium_cents, order.contracts, fill.commission_cents
             )
             # For SELL legs fill_cost_cents stores the signed REALIZED P&L.
             pending.append((coid, fill.premium_cents, realized, fill.commission_cents))
@@ -456,9 +456,7 @@ class PaperSession:
         )
         self.store.journal_intent(intent, now)
         fill = self.broker.execute_unmarked_exit(intent, now)
-        realized = realized_pnl_cents(
-            pos, fill.premium_cents, pos.contracts, self.cfg.commission_per_contract_cents
-        )
+        realized = realized_pnl_cents(pos, fill.premium_cents, pos.contracts, fill.commission_cents)
         new_state = dataclasses.replace(
             pos,
             phase=Phase.CLOSED,
