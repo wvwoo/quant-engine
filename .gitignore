@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# --- virtualenv (28 packages, ~hundreds of MB) ---
+qts_v8/venv/
+.venv/
+venv/
+
+# --- live runtime state (regenerated; never a source of truth in git) ---
+qts_v8/state/*.db
+qts_v8/state/*.db-wal
+qts_v8/state/*.db-shm
+qts_v8/state/*.json
+qts_v8/state/*.jsonl
+
+# --- secrets: never commit. Values live in the environment. ---
+.env
+.env.*
+!.env.example
+*secrets*
+*.pem
+*.key
+
+# --- reference material too large / not source (3.2 MB export + assets) ---
+Algorithmic Options Trade Explained - Google Gemini.html
+Algorithmic Options Trade Explained - Google Gemini_files/
+
+# --- macOS ---
+.DS_Store

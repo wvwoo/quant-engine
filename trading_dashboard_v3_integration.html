@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant OS - Control Room Integration</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        base: '#030712',      /* Ultra dark background */
+                        panel: '#0a101d',     /* Dark panel */
+                        panel_hover: '#0f172a',
+                        border_dim: '#1e293b',
+                        border_lit: '#334155',
+                        accent: '#3b82f6',    /* Electric Blue */
+                        buy: '#10b981',       /* Institutional Green */
+                        sell: '#ef4444',      /* Crimson Red */
+                        warn: '#f59e0b',      /* Amber */
+                        text_main: '#f8fafc',
+                        text_dim: '#94a3b8',
+                        text_mute: '#475569',
+                    },
+                    fontFamily: {
+                        arabic: ['"Tajawal"', 'sans-serif'],
+                        mono: ['"JetBrains Mono"', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { 
+            font-family: 'Tajawal', sans-serif; 
+            background-color: #030712; 
+            color: #f8fafc;
+            background-image: 
+                linear-gradient(rgba(30, 41, 59, 0.15) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(30, 41, 59, 0.15) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+        
+        .number-font { font-family: 'JetBrains Mono', monospace; letter-spacing: -0.5px; }
+        
+        .panel {
+            background-color: rgba(10, 16, 29, 0.85);
+            border: 1px solid #1e293b;
+            backdrop-filter: blur(12px);
+            border-radius: 4px;
+        }
+        
+        .panel-header {
+            border-bottom: 1px solid #1e293b;
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        /* Terminal style scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        .scanline {
+            width: 100%;
+            height: 100px;
+            z-index: 9999;
+            position: absolute;
+            pointer-events: none;
+            background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(59,130,246,0.05) 50%, rgba(0,0,0,0) 100%);
+            opacity: 0.5;
+            animation: scanline 8s linear infinite;
+        }
+        @keyframes scanline {
+            0% { top: -100px; }
+            100% { top: 100%; }
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-sm relative">
+
+    <div class="scanline"></div>
+
+    <!-- Top Navigation / Status Bar -->
+    <header class="h-12 border-b border-border_dim bg-base/90 flex items-center justify-between px-4 shrink-0 z-10">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 border-l border-border_dim pl-4">
+                <div class="h-6 w-6 bg-accent text-white flex items-center justify-center rounded-sm font-bold text-xs">T</div>
+                <h1 class="font-bold text-base tracking-wide number-font">Trading<span class="text-text_mute">OS</span></h1>
+            </div>
+            
+            <div class="flex gap-2">
+                <button class="px-3 py-1 bg-panel border border-border_dim rounded-sm text-xs hover:bg-border_dim transition-colors flex items-center gap-2">
+                    <i data-lucide="link" class="h-3.5 w-3.5"></i> الربط
+                </button>
+                <button class="px-3 py-1 bg-panel border border-border_dim rounded-sm text-xs hover:bg-border_dim transition-colors flex items-center gap-2">
+                    <i data-lucide="settings" class="h-3.5 w-3.5"></i> الإعدادات
+                </button>
+                <button class="px-3 py-1 bg-panel border border-border_dim rounded-sm text-xs hover:bg-border_dim transition-colors">
+                    <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 bg-panel border border-border_dim px-3 py-1 rounded-sm text-xs">
+                <span class="h-2 w-2 rounded-full bg-text_mute"></span>
+                <span class="text-text_dim">غير مشغّل</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 overflow-hidden p-3 grid grid-cols-12 gap-3">
+        
+        <!-- Left Area (Controls & Orchestrator) -->
+        <div class="col-span-12 lg:col-span-8 flex flex-col gap-3 h-full overflow-y-auto pr-1">
+            
+            <!-- Main Control Panel -->
+            <div class="panel p-5 relative overflow-hidden">
+                <!-- Large Status Background -->
+                <div class="absolute -left-10 -top-10 opacity-5">
+                    <i data-lucide="power-off" class="h-64 w-64"></i>
+                </div>
+                
+                <div class="flex justify-between items-start relative z-10">
+                    <!-- Actions (Right side in RTL) -->
+                    <div class="flex flex-col gap-2 w-48">
+                        <button class="w-full py-2.5 bg-accent text-white font-bold rounded-sm flex items-center justify-center gap-2 hover:bg-accent/80 transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)]">
+                            تشغيل
+                        </button>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="py-1.5 bg-base border border-border_dim text-text_dim hover:text-text_main rounded-sm text-xs transition-all">استئناف</button>
+                            <button class="py-1.5 bg-base border border-border_dim text-text_dim hover:text-text_main rounded-sm text-xs transition-all">إيقاف مؤقت</button>
+                        </div>
+                        <button class="w-full py-1.5 bg-base border border-border_dim text-text_dim hover:text-text_main rounded-sm text-xs transition-all">تجميد آمن</button>
+                        <button class="w-full mt-2 py-2 bg-base border border-sell/40 text-sell hover:bg-sell hover:text-white rounded-sm text-xs font-bold transition-all">إيقاف طارئ</button>
+                    </div>
+
+                    <!-- Status Display (Left side in RTL) -->
+                    <div class="text-left flex flex-col items-end">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-[10px] bg-border_dim/50 px-2 py-0.5 rounded text-text_mute border border-border_dim number-font">STOPPED</span>
+                            <span class="text-text_accent text-xs">الحالة التشغيلية</span>
+                        </div>
+                        <h2 class="text-5xl font-extrabold text-text_main tracking-tight mb-2">غير مشغّل</h2>
+                        <p class="text-text_mute text-xs mb-6">النظام لا يقبل إشارات جديدة في حالته الحالية.</p>
+                        
+                        <div class="flex gap-6 text-right">
+                            <div>
+                                <div class="text-[10px] text-text_mute mb-1">الوسيط</div>
+                                <div class="number-font text-text_main font-bold">alpaca</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-text_mute mb-1">البيئة</div>
+                                <div class="text-warn font-bold">تجريبية</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-text_mute mb-1">آخر تحديث</div>
+                                <div class="number-font text-text_main">11:18:58 ص</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Warning Banner -->
+            <div class="panel border-warn/30 bg-warn/5 p-3 flex gap-3 items-start">
+                <div class="p-1 rounded-full bg-warn/20 mt-0.5">
+                    <i data-lucide="alert-circle" class="h-4 w-4 text-warn"></i>
+                </div>
+                <div>
+                    <h4 class="text-warn font-bold text-sm mb-0.5">وضع Paper Shadow مفعّل</h4>
+                    <p class="text-xs text-text_dim number-font leading-relaxed">السوق والمصالحة والمحركات تعمل، لكن إرسال الأوامر الآلية متوقف من إعداد <span class="bg-base px-1 rounded text-text_mute border border-border_dim">PAPER_TRADING_ENABLED</span>.</p>
+                </div>
+            </div>
+
+            <!-- Health Checks (4 Questions) -->
+            <div class="grid grid-cols-4 gap-3">
+                <div class="panel p-4 flex flex-col justify-between h-28 border-t-2 border-t-border_dim hover:border-t-text_dim transition-colors group">
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs font-bold text-text_main group-hover:text-white">هل النظام حي؟</span>
+                        <span class="text-[10px] text-text_mute number-font">01</span>
+                    </div>
+                    <div class="mt-auto">
+                        <div class="text-xl font-bold text-text_main number-font">لا</div>
+                        <div class="text-[10px] text-text_mute mt-1">لا توجد حالة تشغيل مؤكدة</div>
+                    </div>
+                </div>
+                <div class="panel p-4 flex flex-col justify-between h-28 border-t-2 border-t-border_dim hover:border-t-text_dim transition-colors group">
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs font-bold text-text_main group-hover:text-white">هل هو آمن؟</span>
+                        <span class="text-[10px] text-text_mute number-font">02</span>
+                    </div>
+                    <div class="mt-auto">
+                        <div class="text-xl font-bold text-text_main number-font">غير متاح</div>
+                        <div class="text-[10px] text-text_mute mt-1">المصالحة غير مؤكدة</div>
+                    </div>
+                </div>
+                <div class="panel p-4 flex flex-col justify-between h-28 border-t-2 border-t-border_dim hover:border-t-text_dim transition-colors group">
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs font-bold text-text_main group-hover:text-white">هل التنفيذ جيد؟</span>
+                        <span class="text-[10px] text-text_mute number-font">03</span>
+                    </div>
+                    <div class="mt-auto">
+                        <div class="text-xl font-bold text-text_main number-font">غير متاح</div>
+                        <div class="text-[10px] text-text_mute mt-1">لا توجد صفقات مقاسة</div>
+                    </div>
+                </div>
+                <div class="panel p-4 flex flex-col justify-between h-28 border-t-2 border-t-border_dim hover:border-t-text_dim transition-colors group">
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs font-bold text-text_main group-hover:text-white">هل النتيجة رابحة؟</span>
+                        <span class="text-[10px] text-text_mute number-font">04</span>
+                    </div>
+                    <div class="mt-auto">
+                        <div class="text-xl font-bold text-text_main number-font">غير متاح</div>
+                        <div class="text-[10px] text-text_mute mt-1">لا توجد نتائج فعلية</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Orchestrator / المحركات -->
+            <div class="panel flex-1 flex flex-col min-h-[220px]">
+                <div class="panel-header px-4 py-3 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main tracking-wide">المحركات <span class="text-[10px] text-text_mute ml-2 number-font font-normal uppercase tracking-widest">Orchestrator</span></h3>
+                    <span class="text-xs text-text_mute number-font">0 / 8 سليمة</span>
+                </div>
+                <div class="flex-1 grid grid-cols-4 gap-px bg-border_dim p-px">
+                    <!-- Module 1 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">البنية الأساسية</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 2 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">بيانات السوق</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 3 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">المراقبة</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 4 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">الاستراتيجية</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 5 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">المخاطر</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 6 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">التنفيذ</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 7 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">المحفظة</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                    <!-- Module 8 -->
+                    <div class="bg-base p-3 relative flex flex-col justify-between hover:bg-panel_hover transition-colors group">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="text-[9px] px-1.5 py-0.5 bg-border_dim/40 text-text_mute rounded border border-border_dim/80 number-font">UNSEEN</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-text_dim group-hover:text-text_main transition-colors mb-0.5">سجل القرارات</h4>
+                            <p class="text-[10px] text-text_mute">لا توجد نبضة</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit Trail (Terminal) -->
+            <div class="panel shrink-0 flex flex-col mt-auto">
+                <div class="panel-header px-4 py-2 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main tracking-wide">سجل التحكم <span class="text-[10px] text-text_mute ml-2 number-font font-normal uppercase tracking-widest">Audit Trail</span></h3>
+                    <span class="text-[10px] text-text_mute">آخر 10 أوامر</span>
+                </div>
+                <div class="p-3 text-xs number-font text-text_dim h-24 overflow-y-auto" dir="ltr">
+                    <div class="flex gap-4 hover:bg-border_dim/30 px-2 py-1 rounded cursor-default">
+                        <span class="text-text_mute">12:33:27 ص</span>
+                        <span class="text-accent font-bold w-12">START</span>
+                        <span class="text-text_main">codex-paper-smoke</span>
+                        <span class="text-text_mute font-arabic text-right flex-1">تم تفعيل وضع Paper Trading...</span>
+                        <span class="text-buy text-[10px]">مقبول</span>
+                    </div>
+                    <div class="flex gap-4 px-2 py-1 mt-2">
+                        <span class="text-text_mute">> _<span class="animate-[blink_1s_step-end_infinite] opacity-100"></span></span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right Area (Metrics 2x2 Layout conceptually, stacked here) -->
+        <div class="col-span-12 lg:col-span-4 flex flex-col gap-3 h-full overflow-y-auto">
+            
+            <!-- Performance -->
+            <div class="panel flex flex-col">
+                <div class="panel-header px-4 py-3 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main">الأداء الحقيقي</h3>
+                    <span class="text-[9px] text-accent number-font uppercase tracking-widest font-bold">Net Performance</span>
+                </div>
+                <div class="p-1">
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">الربح المحقق</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">الربح غير المحقق</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim number-font">Profit Factor</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim number-font">Cost Drag</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim number-font">Alpha / Beta</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Safety First -->
+            <div class="panel flex flex-col">
+                <div class="panel-header px-4 py-3 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main">المخاطر والسلامة</h3>
+                    <span class="text-[9px] text-accent number-font uppercase tracking-widest font-bold">Safety First</span>
+                </div>
+                <div class="p-1">
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">التراجع الحالي</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">خسارة اليوم من الحد</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">التعرّض</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">التركيز القطاعي</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">ارتباط المراكز</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Execution & Parity -->
+            <div class="panel flex flex-col">
+                <div class="panel-header px-4 py-3 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main">التنفيذ والتطابق</h3>
+                    <span class="text-[9px] text-accent number-font uppercase tracking-widest font-bold">Execution & Parity</span>
+                </div>
+                <div class="p-1">
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">الانزلاق</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">نسبة التنفيذ</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">نسبة الرفض</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">زمن التنفيذ p95</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">فرق المطابقة</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Signals & Activity -->
+            <div class="panel flex flex-col mb-1">
+                <div class="panel-header px-4 py-3 flex justify-between items-center">
+                    <h3 class="text-sm font-bold text-text_main">الإشارات والنشاط</h3>
+                    <span class="text-[9px] text-accent number-font uppercase tracking-widest font-bold">Signals & Activity</span>
+                </div>
+                <div class="p-1">
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">جودة الإشارة</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">المرفوض من المخاطر</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">صفقات اليوم</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 border-b border-border_dim/30 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">المراكز / الأوامر</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2.5 px-3 hover:bg-border_dim/20 transition-colors">
+                        <span class="text-xs text-text_dim">منذ آخر صفقة</span>
+                        <span class="text-xs text-text_mute number-font font-bold">غير متاح</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

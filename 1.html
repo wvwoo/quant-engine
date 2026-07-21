@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradingBot — لوحة التحكم</title>
+<style>
+:root{
+  --bg:#070A12; --bg2:#0A0F1A; --surface:#101626; --surface2:#0E1320; --line:rgba(255,255,255,.07);
+  --line2:rgba(255,255,255,.12); --txt:#EAF0FB; --sub:#8B95AD; --muted:#5B6478;
+  --green:#22C55E; --greenS:#16331f; --red:#F0556B; --redS:#3a1620; --amber:#F5A524; --amberS:#3a2a0c;
+  --blue:#4C8DFF; --blueS:#13233f; --cyan:#22D3EE; --purple:#A78BFA; --pink:#F472B6;
+  --radius:18px; --shadow:0 18px 40px -16px rgba(0,0,0,.7);
+  --font:'Segoe UI',system-ui,-apple-system,'Noto Sans Arabic','Helvetica Neue',Tahoma,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font); color:var(--txt); background:var(--bg);
+  background-image:
+    radial-gradient(900px 500px at 90% -8%, rgba(76,141,255,.16), transparent 60%),
+    radial-gradient(800px 500px at 5% 0%, rgba(167,139,250,.12), transparent 55%),
+    radial-gradient(700px 600px at 50% 120%, rgba(34,211,238,.07), transparent 60%);
+  -webkit-font-smoothing:antialiased; line-height:1.5; overflow:hidden;
+}
+.app{display:grid; grid-template-columns:264px 1fr; height:100vh}
+/* ---------- Sidebar ---------- */
+.sidebar{
+  background:linear-gradient(180deg, rgba(16,22,38,.9), rgba(8,11,18,.95));
+  border-inline-start:1px solid var(--line); padding:22px 18px; display:flex; flex-direction:column; gap:8px;
+  backdrop-filter:blur(8px);
+}
+.brand{display:flex; align-items:center; gap:12px; padding:6px 8px 18px}
+.brand .logo{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;
+  background:linear-gradient(135deg,#4C8DFF,#A78BFA); box-shadow:0 8px 20px -6px rgba(76,141,255,.7); font-size:22px}
+.brand h1{font-size:17px;font-weight:700;letter-spacing:.2px}
+.brand span{font-size:11px;color:var(--sub);font-weight:500}
+.nav{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.nav .label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:1.4px;padding:14px 10px 6px}
+.nav a{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;color:var(--sub);
+  font-size:13.5px;font-weight:600;cursor:pointer;transition:.18s;border:1px solid transparent}
+.nav a .ic{width:20px;text-align:center;font-size:15px;opacity:.9}
+.nav a:hover{background:rgba(255,255,255,.04);color:var(--txt)}
+.nav a.active{background:linear-gradient(100deg,rgba(76,141,255,.18),rgba(167,139,250,.10));
+  color:#fff;border-color:rgba(76,141,255,.35);box-shadow:inset 0 0 0 1px rgba(255,255,255,.03)}
+.nav a.active .ic{color:var(--blue)}
+.side-card{margin-top:auto;background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:14px}
+.side-card .row{display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-bottom:8px}
+.side-card .row:last-child{margin-bottom:0}
+.side-card .k{color:var(--sub)}
+.dotpulse{width:9px;height:9px;border-radius:50%;background:var(--green);position:relative;display:inline-block}
+.dotpulse::after{content:'';position:absolute;inset:-4px;border-radius:50%;background:var(--green);opacity:.4;animation:pulse 1.8s infinite}
+@keyframes pulse{0%{transform:scale(.6);opacity:.6}70%{transform:scale(2.2);opacity:0}100%{opacity:0}}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px}
+.pill.green{color:var(--green);background:var(--greenS);border:1px solid rgba(34,197,94,.35)}
+/* ---------- Main ---------- */
+.main{overflow-y:auto;padding:22px 28px 40px}
+.main::-webkit-scrollbar{width:10px}
+.main::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.topbar .title h2{font-size:23px;font-weight:800;letter-spacing:.2px}
+.topbar .title p{font-size:13px;color:var(--sub);margin-top:3px}
+.topbar .tools{display:flex;align-items:center;gap:12px}
+.chip-time{font-size:12.5px;color:var(--sub);background:var(--surface2);border:1px solid var(--line);padding:9px 14px;border-radius:12px}
+.avatar{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#22D3EE,#4C8DFF);display:grid;place-items:center;font-weight:800;font-size:15px;color:#03121f}
+/* views */
+.view{display:none;animation:fade .4s ease}
+.view.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* grid + cards */
+.grid{display:grid;gap:16px}
+.card{background:linear-gradient(160deg,var(--surface),var(--surface2));border:1px solid var(--line);
+  border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;position:relative;overflow:hidden}
+.card .ttl{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.card .ttl h3{font-size:14.5px;font-weight:700}
+.card .ttl .sub{font-size:12px;color:var(--sub)}
+/* KPI */
+.kpis{grid-template-columns:repeat(5,1fr)}
+.kpi{padding:16px 16px 14px}
+.kpi::before{content:'';position:absolute;inset-inline-start:0;top:14px;bottom:14px;width:4px;border-radius:4px;background:var(--accent)}
+.kpi .cap{font-size:12.5px;color:var(--sub);display:flex;align-items:center;justify-content:space-between}
+.kpi .cap .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:15px;
+  background:var(--accentS);color:var(--accent)}
+.kpi .val{font-size:25px;font-weight:800;margin:10px 0 6px;letter-spacing:.3px;font-feature-settings:'tnum'}
+.kpi .delta{font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:5px}
+.kpi .delta.up{color:var(--green)} .kpi .delta.down{color:var(--red)} .kpi .delta.warn{color:var(--amber)} .kpi .delta.neu{color:var(--sub)}
+.kpi .spark{position:absolute;inset-inline-end:14px;bottom:14px;width:78px;height:34px;opacity:.85}
+/* layout rows */
+.row-2{grid-template-columns:1.9fr 1fr}
+.row-3{grid-template-columns:repeat(3,1fr)}
+/* gauges */
+.gauge{display:flex;align-items:center;gap:16px;padding:6px 2px}
+.ring{--p:62;--c:var(--blue);width:96px;height:96px;border-radius:50%;flex:none;
+  background:conic-gradient(var(--c) calc(var(--p)*1%), rgba(255,255,255,.06) 0);
+  display:grid;place-items:center;position:relative}
+.ring::after{content:'';position:absolute;inset:10px;border-radius:50%;background:var(--surface2)}
+.ring .lbl{position:relative;z-index:2;text-align:center}
+.ring .lbl b{font-size:20px;font-weight:800}
+.ring .lbl small{font-size:10.5px;color:var(--sub);display:block}
+.gauge .meta{font-size:12.5px;color:var(--sub)}
+.gauge .meta b{color:var(--txt);font-size:14px;display:block;margin-bottom:2px;font-weight:700}
+/* safety strip */
+.safety{grid-template-columns:repeat(5,1fr)}
+.stat{background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:14px;position:relative}
+.stat::before{content:'';position:absolute;inset-inline-start:0;top:12px;bottom:12px;width:3px;border-radius:3px;background:var(--accent)}
+.stat .lbl{font-size:12px;color:var(--sub)}
+.stat .v{font-size:15px;font-weight:800;color:var(--accent);margin-top:8px;display:flex;align-items:center;gap:8px}
+/* mini stats */
+.ministats{grid-template-columns:repeat(6,1fr)}
+.mini{background:var(--surface2);border:1px solid var(--line);border-radius:13px;padding:13px 14px}
+.mini .l{font-size:11.5px;color:var(--sub)} .mini .v{font-size:18px;font-weight:800;margin-top:5px}
+/* risk table */
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.tab{font-size:12.5px;font-weight:700;color:var(--sub);padding:8px 16px;border-radius:10px;cursor:pointer;
+  background:var(--surface2);border:1px solid var(--line);transition:.16s}
+.tab:hover{color:var(--txt)} .tab.active{background:rgba(76,141,255,.16);color:#fff;border-color:rgba(76,141,255,.4)}
+table{width:100%;border-collapse:collapse}
+thead th{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  text-align:right;padding:10px 14px;border-bottom:1px solid var(--line)}
+thead th.c{text-align:center}
+tbody td{padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.04);font-size:13px;vertical-align:middle}
+tbody tr:hover{background:rgba(255,255,255,.022)}
+.rid{font-family:'SF Mono','Consolas',monospace;font-size:12.5px;color:var(--txt);direction:ltr;text-align:left;font-weight:600}
+.cat-band td{background:rgba(255,255,255,.018);padding:9px 14px}
+.cat-tag{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.5px}
+.cat-tag::before{content:'';width:8px;height:8px;border-radius:3px;background:var(--accent)}
+.mode{font-size:11px;font-weight:800;letter-spacing:.4px;padding:5px 11px;border-radius:999px;display:inline-block;direction:ltr}
+.mode.enforce{color:var(--green);background:var(--greenS);border:1px solid rgba(34,197,94,.4)}
+.mode.observe{color:var(--amber);background:var(--amberS);border:1px solid rgba(245,165,36,.4)}
+.mode.disabled{color:var(--sub);background:rgba(255,255,255,.05);border:1px solid var(--line2)}
+.mode.locked{color:var(--blue);background:var(--blueS);border:1px solid rgba(76,141,255,.4)}
+.num{font-weight:800;font-feature-settings:'tnum';text-align:center}
+.num.r{color:var(--red)} .num.a{color:var(--amber)} .num.m{color:var(--muted)}
+.reason{font-size:11.5px;color:var(--sub);direction:ltr;text-align:left}
+/* segmented control */
+.seg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:2px;direction:ltr}
+.seg button{border:none;background:none;color:var(--muted);font:inherit;font-size:10.5px;font-weight:800;
+  padding:5px 9px;border-radius:7px;cursor:pointer;transition:.14s}
+.seg button.on[data-m=E]{background:var(--green);color:#04210f}
+.seg button.on[data-m=O]{background:var(--amber);color:#2a1c00}
+.seg button.on[data-m=D]{background:rgba(255,255,255,.15);color:#fff}
+/* funnel */
+.funnel{display:flex;flex-direction:column;gap:14px}
+.fstage{display:grid;grid-template-columns:160px 1fr 52px;align-items:center;gap:14px}
+.fstage .fl{font-size:13px;color:var(--sub);font-weight:600}
+.ftrack{height:30px;background:var(--bg2);border-radius:9px;overflow:hidden;position:relative}
+.ffill{height:100%;border-radius:9px;background:linear-gradient(90deg,var(--c1),var(--c2));
+  display:flex;align-items:center;justify-content:flex-start;animation:grow 1s ease}
+@keyframes grow{from{width:0!important}}
+.fstage .fv{font-size:15px;font-weight:800;text-align:center}
+/* donut */
+.donut{--seg:conic-gradient(var(--green) 0 86%, var(--amber) 86% 89%, var(--red) 89% 95%, #3a4358 95% 100%);
+  width:150px;height:150px;border-radius:50%;background:var(--seg);display:grid;place-items:center;margin:6px auto}
+.donut::after{content:'';position:absolute;width:96px;height:96px;border-radius:50%;background:var(--surface2)}
+.donut .dl{position:relative;z-index:2;text-align:center}
+.donut .dl b{font-size:26px;font-weight:800;color:var(--green)} .donut .dl small{font-size:11px;color:var(--sub)}
+.legend{display:flex;flex-direction:column;gap:9px;margin-top:6px}
+.legend .li{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--sub);justify-content:space-between}
+.legend .li .nm{display:flex;align-items:center;gap:8px}
+.legend .dt{width:9px;height:9px;border-radius:3px}
+/* latency bars */
+.lat{display:flex;flex-direction:column;gap:13px;margin-top:4px}
+.lat .lr{display:grid;grid-template-columns:42px 1fr 56px;align-items:center;gap:12px}
+.lat .lk{font-size:12px;color:var(--sub);direction:ltr;text-align:left}
+.ltrack{height:8px;background:var(--bg2);border-radius:6px;overflow:hidden}
+.lfill{height:100%;border-radius:6px}
+.lat .lv{font-size:12.5px;font-weight:800;text-align:left;direction:ltr}
+/* monitors */
+.mon{grid-template-columns:repeat(3,1fr);gap:12px}
+.moncard{background:var(--surface2);border:1px solid var(--line);border-radius:13px;padding:14px;display:flex;
+  align-items:center;justify-content:space-between}
+.moncard .ml{font-size:12.5px;color:var(--sub)} .moncard .mv{font-size:22px;font-weight:800;margin-top:4px}
+.moncard .badge-ok{width:11px;height:11px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--greenS)}
+.moncard .badge-w{width:11px;height:11px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px var(--amberS)}
+.note{font-size:11.5px;color:var(--muted);text-align:center;margin-top:26px}
+.section-gap{height:16px}
+h4.blk{font-size:13px;font-weight:800;color:var(--sub);margin:4px 0 12px;letter-spacing:.3px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">⚡</div>
+      <div><h1>TradingBot</h1><span>Risk &amp; Execution Console</span></div>
+    </div>
+    <nav class="nav">
+      <div class="label">اللوحات</div>
+      <a class="active" data-view="overview"><span class="ic">■</span> نظرة عامة</a>
+      <a data-view="risk"><span class="ic">⛨</span> محرّك المخاطر</a>
+      <a data-view="exec"><span class="ic">⇄</span> التنفيذ وما بعد التداول</a>
+      <div class="label">النظام</div>
+      <a><span class="ic">☷</span> الاستراتيجيات</a>
+      <a><span class="ic">≡</span> سجل التدقيق</a>
+      <a><span class="ic">⚙</span> الإعدادات</a>
+    </nav>
+    <div class="side-card">
+      <div class="row"><span class="k">الوضع</span> <span class="pill green"><span class="dotpulse"></span> TRADING</span></div>
+      <div class="row"><span class="k">Kill Switch</span> <b style="color:var(--green)">ARMED</b></div>
+      <div class="row"><span class="k">الإصدار</span> <b>risk-rules v12</b></div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="topbar">
+      <div class="title">
+        <h2 id="pgTitle">نظرة عامة</h2>
+        <p id="pgSub">ملخص أداء المحفظة وحالة السلامة — لحظي</p>
+      </div>
+      <div class="tools">
+        <span class="chip-time">◉ مباشر · 10:19 · GMT-3</span>
+        <div class="avatar">Z</div>
+      </div>
+    </div>
+
+    <!-- ============ OVERVIEW ============ -->
+    <section class="view active" id="overview">
+      <div class="grid kpis">
+        <div class="card kpi" style="--accent:var(--blue);--accentS:var(--blueS)">
+          <div class="cap">قيمة المحفظة <span class="ic">◈</span></div>
+          <div class="val">$1,284,500</div><div class="delta up">▲ +0.66% اليوم</div>
+        </div>
+        <div class="card kpi" style="--accent:var(--green);--accentS:var(--greenS)">
+          <div class="cap">ربح/خسارة اليوم <span class="ic">△</span></div>
+          <div class="val">+$8,420</div><div class="delta up">▲ محقّق</div>
+          <svg class="spark" data-spark="3,5,4,6,5,7,6,8,9" data-col="#22C55E"></svg>
+        </div>
+        <div class="card kpi" style="--accent:var(--cyan);--accentS:#0c2a33">
+          <div class="cap">الربح المفتوح <span class="ic">◉</span></div>
+          <div class="val">+$3,210</div><div class="delta neu">7 صفقات مفتوحة</div>
+        </div>
+        <div class="card kpi" style="--accent:var(--amber);--accentS:var(--amberS)">
+          <div class="cap">أقصى تراجع <span class="ic">▼</span></div>
+          <div class="val">-4.8%</div><div class="delta warn">الحد -8.0%</div>
+        </div>
+        <div class="card kpi" style="--accent:var(--purple);--accentS:#241a40">
+          <div class="cap">نسبة الفوز <span class="ic">⚑</span></div>
+          <div class="val">58%</div><div class="delta up">Sharpe 1.74</div>
+        </div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="grid row-2">
+        <div class="card">
+          <div class="ttl"><h3>منحنى حقوق الملكية</h3><span class="sub">آخر 30 يوم · <b style="color:var(--green)">+12.4%</b></span></div>
+          <svg id="equity" viewBox="0 0 760 240" preserveAspectRatio="none" style="width:100%;height:240px"></svg>
+        </div>
+        <div class="card">
+          <div class="ttl"><h3>التعرّض والمخاطرة</h3></div>
+          <div class="gauge"><div class="ring" style="--p:62;--c:var(--blue)"><div class="lbl"><b>62%</b><small>Gross</small></div></div>
+            <div class="meta"><b>التعرّض الإجمالي</b>62% من الحد · صافٍ 38%</div></div>
+          <div style="height:1px;background:var(--line);margin:14px 0"></div>
+          <div class="gauge"><div class="ring" style="--p:40;--c:var(--amber)"><div class="lbl"><b>40%</b><small>Used</small></div></div>
+            <div class="meta"><b>حد الخسارة اليومية</b>-2.0% من -5.0% المسموح</div></div>
+        </div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="grid safety">
+        <div class="stat" style="--accent:var(--green)"><div class="lbl">Kill Switch</div><div class="v"><span class="dotpulse"></span> ARMED</div></div>
+        <div class="stat" style="--accent:var(--green)"><div class="lbl">المطابقة</div><div class="v">CLEAN</div></div>
+        <div class="stat" style="--accent:var(--green)"><div class="lbl">صحة البيانات</div><div class="v">USABLE</div></div>
+        <div class="stat" style="--accent:var(--green)"><div class="lbl">Event Bus</div><div class="v">HEALTHY</div></div>
+        <div class="stat" style="--accent:var(--green)"><div class="lbl">Journal</div><div class="v">OK</div></div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="grid ministats">
+        <div class="mini"><div class="l">أوامر اليوم</div><div class="v">142</div></div>
+        <div class="mini"><div class="l">مُنفّذة</div><div class="v" style="color:var(--green)">128</div></div>
+        <div class="mini"><div class="l">جزئية</div><div class="v" style="color:var(--amber)">5</div></div>
+        <div class="mini"><div class="l">مرفوضة</div><div class="v" style="color:var(--red)">9</div></div>
+        <div class="mini"><div class="l">متوسط الانزلاق</div><div class="v" style="color:var(--cyan)">3.2<small style="font-size:11px">bps</small></div></div>
+        <div class="mini"><div class="l">زمن p99</div><div class="v" style="color:var(--blue)">142<small style="font-size:11px">ms</small></div></div>
+      </div>
+    </section>
+
+    <!-- ============ RISK ENGINE ============ -->
+    <section class="view" id="risk">
+      <div class="grid ministats">
+        <div class="mini"><div class="l">إجمالي القواعد</div><div class="v">27</div></div>
+        <div class="mini"><div class="l">ENFORCE</div><div class="v" style="color:var(--green)">19</div></div>
+        <div class="mini"><div class="l">OBSERVE</div><div class="v" style="color:var(--amber)">6</div></div>
+        <div class="mini"><div class="l">DISABLED</div><div class="v" style="color:var(--sub)">2</div></div>
+        <div class="mini"><div class="l">منع اليوم</div><div class="v" style="color:var(--red)">18</div></div>
+        <div class="mini"><div class="l">would-block</div><div class="v" style="color:var(--amber)">54</div></div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="tabs">
+        <div class="tab active" data-f="all">الكل</div>
+        <div class="tab" data-f="critical">CRITICAL</div>
+        <div class="tab" data-f="adjustable">ADJUSTABLE</div>
+        <div class="tab" data-f="observability">OBSERVABILITY</div>
+      </div>
+      <div class="card" style="padding:6px 6px 10px">
+        <table>
+          <thead><tr>
+            <th>القاعدة</th><th class="c">الوضع</th><th class="c">التحكم</th>
+            <th class="c">Blocks</th><th class="c">Would</th><th>آخر سبب / الإصدار</th>
+          </tr></thead>
+          <tbody id="rules"></tbody>
+        </table>
+      </div>
+      <p class="note">الداشبورد يعرض effective backend state — الأزرار تؤثّر فعلياً على مسار التقييم · الأرقام توضيحية</p>
+    </section>
+
+    <!-- ============ EXECUTION ============ -->
+    <section class="view" id="exec">
+      <div class="grid row-2">
+        <div class="card">
+          <div class="ttl"><h3>خط أنابيب الأوامر</h3><span class="sub">من الإشارة إلى التنفيذ</span></div>
+          <div class="funnel">
+            <div class="fstage"><span class="fl">الإشارات</span><div class="ftrack"><div class="ffill" style="width:100%;--c1:#7C5CFF;--c2:#A78BFA"></div></div><span class="fv">210</span></div>
+            <div class="fstage"><span class="fl">موافقة ما قبل التداول</span><div class="ftrack"><div class="ffill" style="width:80%;--c1:#2f6bd8;--c2:#4C8DFF"></div></div><span class="fv">168</span></div>
+            <div class="fstage"><span class="fl">مُرسلة</span><div class="ftrack"><div class="ffill" style="width:71%;--c1:#1796a8;--c2:#22D3EE"></div></div><span class="fv">150</span></div>
+            <div class="fstage"><span class="fl">مُنفّذة</span><div class="ftrack"><div class="ffill" style="width:61%;--c1:#1a9c4e;--c2:#22C55E"></div></div><span class="fv">128</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ttl"><h3>معدّل التنفيذ</h3></div>
+          <div class="donut"><div class="dl"><b>91%</b><small>Fill rate</small></div></div>
+          <div class="legend">
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--green)"></span>مُنفّذ</span><b>128</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--amber)"></span>جزئي</span><b>5</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--red)"></span>مرفوض</span><b>9</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:#3a4358"></span>معلّق</span><b>8</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="grid row-3">
+        <div class="card">
+          <div class="ttl"><h3>اتجاه الانزلاق</h3><span class="sub"><b style="color:var(--cyan)">3.2</b> bps</span></div>
+          <svg id="slip" viewBox="0 0 320 130" preserveAspectRatio="none" style="width:100%;height:130px"></svg>
+        </div>
+        <div class="card">
+          <div class="ttl"><h3>زمن التنفيذ</h3></div>
+          <div class="lat">
+            <div class="lr"><span class="lk">p50</span><div class="ltrack"><div class="lfill" style="width:27%;background:var(--green)"></div></div><span class="lv">38ms</span></div>
+            <div class="lr"><span class="lk">p95</span><div class="ltrack"><div class="lfill" style="width:68%;background:var(--blue)"></div></div><span class="lv">96ms</span></div>
+            <div class="lr"><span class="lk">p99</span><div class="ltrack"><div class="lfill" style="width:100%;background:var(--amber)"></div></div><span class="lv">142ms</span></div>
+            <div class="lr"><span class="lk">max</span><div class="ltrack"><div class="lfill" style="width:84%;background:var(--red)"></div></div><span class="lv">210ms</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ttl"><h3>أداء الاستراتيجيات</h3></div>
+          <div class="legend" style="gap:14px">
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--blue)"></span>Momentum</span><b style="color:var(--green)">+1.2%</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--purple)"></span>Mean-Reversion</span><b style="color:var(--red)">-0.4%</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--cyan)"></span>Breakout</span><b style="color:var(--green)">+0.8%</b></div>
+            <div class="li"><span class="nm"><span class="dt" style="background:var(--amber)"></span>Pairs</span><b style="color:var(--green)">+0.3%</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="section-gap"></div>
+      <div class="card">
+        <div class="ttl"><h3>مراقبات ما بعد التداول</h3><span class="sub">Post-Trade Monitors</span></div>
+        <div class="grid mon">
+          <div class="moncard"><div><div class="ml">تعبئة جزئية</div><div class="mv" style="color:var(--amber)">5</div></div><div class="badge-w"></div></div>
+          <div class="moncard"><div><div class="ml">أمر يتيم</div><div class="mv" style="color:var(--green)">0</div></div><div class="badge-ok"></div></div>
+          <div class="moncard"><div><div class="ml">تعبئة مكررة</div><div class="mv" style="color:var(--green)">0</div></div><div class="badge-ok"></div></div>
+          <div class="moncard"><div><div class="ml">تسرّب حجز</div><div class="mv" style="color:var(--green)">0</div></div><div class="badge-ok"></div></div>
+          <div class="moncard"><div><div class="ml">عدم تطابق مركز</div><div class="mv" style="color:var(--green)">0</div></div><div class="badge-ok"></div></div>
+          <div class="moncard"><div><div class="ml">خرق تعرّض</div><div class="mv" style="color:var(--green)">0</div></div><div class="badge-ok"></div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+const META={overview:['نظرة عامة','ملخص أداء المحفظة وحالة السلامة — لحظي'],
+  risk:['محرّك المخاطر','الأوضاع ENFORCE / OBSERVE / DISABLED — تحكم مفروض server-side'],
+  exec:['التنفيذ وما بعد التداول','خط الأوامر · الانزلاق · الزمن · المراقبات']};
+document.querySelectorAll('.nav a[data-view]').forEach(a=>a.onclick=()=>{
+  document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');
+  const v=a.dataset.view;document.querySelectorAll('.view').forEach(s=>s.classList.toggle('active',s.id===v));
+  document.getElementById('pgTitle').textContent=META[v][0];document.getElementById('pgSub').textContent=META[v][1];
+});
+// ---- chart builders (smooth Catmull-Rom -> bezier) ----
+function smooth(pts){let d=`M${pts[0][0]},${pts[0][1]}`;for(let i=0;i<pts.length-1;i++){
+  const p0=pts[i-1]||pts[i],p1=pts[i],p2=pts[i+1],p3=pts[i+2]||p2;
+  const c1x=p1[0]+(p2[0]-p0[0])/6,c1y=p1[1]+(p2[1]-p0[1])/6;
+  const c2x=p2[0]-(p3[0]-p1[0])/6,c2y=p2[1]-(p3[1]-p1[1])/6;
+  d+=` C${c1x},${c1y} ${c2x},${c2y} ${p2[0]},${p2[1]}`;}return d;}
+function draw(svg,vals,w,h,col,id){const mn=Math.min(...vals),mx=Math.max(...vals),pad=14;
+  const pts=vals.map((v,i)=>[pad+i/(vals.length-1)*(w-2*pad), h-pad-(v-mn)/((mx-mn)||1)*(h-2*pad)]);
+  const line=smooth(pts);const area=line+` L${pts[pts.length-1][0]},${h} L${pts[0][0]},${h} Z`;
+  svg.innerHTML=`<defs><linearGradient id="g${id}" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="${col}" stop-opacity=".35"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${area}" fill="url(#g${id})"/><path d="${line}" fill="none" stroke="${col}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`;}
+const eq=[];let b=100;for(let i=0;i<40;i++){b*=1+(Math.sin(i/3)*.004+ (i*0.0012) + (i%5===0?-.006:.003));eq.push(b);} 
+draw(document.getElementById('equity'),eq,760,240,'#22C55E','eq');
+const sl=[2.4,2.9,2.6,3.4,3.0,2.7,3.8,3.2,2.9,3.6,3.1,2.8,3.3,3.0,3.2];
+draw(document.getElementById('slip'),sl,320,130,'#22D3EE','sl');
+document.querySelectorAll('svg[data-spark]').forEach((s,i)=>{const v=s.dataset.spark.split(',').map(Number);
+  s.setAttribute('viewBox','0 0 78 34');draw(s,v,78,34,s.dataset.col,'sp'+i);});
+// ---- risk rules ----
+const RULES=[
+ {cat:'critical',name:'CRITICAL — فرامل النظام',col:'var(--red)'},
+ {id:'kill_switch',mode:'enforce',lock:1,b:0,w:'—',r:'armed · v12'},
+ {id:'data_health_usable',mode:'enforce',lock:1,b:2,w:'—',r:'DATA_HEALTH_UNUSABLE · v12'},
+ {id:'reconciliation_clean',mode:'enforce',lock:1,b:0,w:'—',r:'clean · v12'},
+ {id:'daily_loss_limit',mode:'enforce',lock:1,b:0,w:'—',r:'-2.0% / -5.0% · v12'},
+ {id:'max_drawdown',mode:'enforce',lock:1,b:0,w:'—',r:'-4.8% / -8.0% · v12'},
+ {id:'decision_journal_available',mode:'locked',lock:2,b:0,w:'—',r:'can_disable=false · v12'},
+ {cat:'adjustable',name:'ADJUSTABLE — قابلة للضبط',col:'var(--cyan)'},
+ {id:'max_order_notional',mode:'enforce',b:5,w:'—',r:'ORDER_NOTIONAL_EXCEEDED · v12'},
+ {id:'max_gross_exposure',mode:'enforce',b:0,w:'—',r:'62% / 100% · v12'},
+ {id:'max_position_size',mode:'enforce',b:2,w:'—',r:'POSITION_SIZE · v12'},
+ {id:'max_symbol_concentration',mode:'observe',b:0,w:42,r:'would 18%>15% · v11'},
+ {id:'max_sector_concentration',mode:'observe',b:0,w:12,r:'would 22%>20% · v11'},
+ {id:'max_slippage_bps',mode:'enforce',b:3,w:'—',r:'SLIPPAGE_LIMIT · v12'},
+ {id:'order_rate_limit',mode:'enforce',b:1,w:'—',r:'RATE_LIMIT · v12'},
+ {id:'signal_expiry_required',mode:'enforce',b:7,w:'—',r:'SIGNAL_EXPIRED · v12'},
+ {cat:'observability',name:'OBSERVABILITY — مراقبة',col:'var(--purple)'},
+ {id:'reject_rate_warning',mode:'observe',b:0,w:7,r:'6.3% · v10'},
+ {id:'execution_latency_warning',mode:'observe',b:0,w:5,r:'p99 142ms · v10'},
+ {id:'cost_drag_warning',mode:'observe',b:0,w:3,r:'1.8% drag · v10'},
+ {id:'strategy_drawdown_warning',mode:'disabled',b:0,w:'—',r:'muted by zaid · v9'},
+];
+const MN={enforce:'ENFORCE',observe:'OBSERVE',disabled:'DISABLED',locked:'LOCKED'};
+function seg(mode,lock){const on=m=>mode===m?'on':'';
+  if(lock===2)return `<span class="mode locked">LOCKED</span>`;
+  const dis=lock?'title="يتطلب Manual override + TTL"':'';
+  return `<span class="seg" ${dis}><button data-m="E" class="${on('enforce')}">ENF</button>
+    <button data-m="O" class="${on('observe')}">OBS</button>
+    <button data-m="D" class="${on('disabled')}">OFF</button></span>`;}
+function render(filter='all'){const tb=document.getElementById('rules');tb.innerHTML='';let curCat='all';
+  RULES.forEach(x=>{
+    if(x.cat){curCat=x.cat;if(filter!=='all'&&filter!==x.cat)return;
+      tb.innerHTML+=`<tr class="cat-band"><td colspan="6"><span class="cat-tag" style="--accent:${x.col};color:${x.col}">${x.name}</span></td></tr>`;return;}
+    if(filter!=='all'&&filter!==curCat)return;
+    tb.innerHTML+=`<tr>
+      <td class="rid">${x.id}</td>
+      <td style="text-align:center"><span class="mode ${x.mode}">${MN[x.mode]}</span></td>
+      <td style="text-align:center">${seg(x.mode,x.lock)}</td>
+      <td class="num ${x.b>0?'r':'m'}">${x.b}</td>
+      <td class="num ${x.w!=='—'?'a':'m'}">${x.w}</td>
+      <td class="reason">${x.r}</td></tr>`;});
+  // segmented interactivity
+  tb.querySelectorAll('.seg').forEach(sg=>sg.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{
+    if(sg.title)return;sg.querySelectorAll('button').forEach(z=>z.classList.remove('on'));btn.classList.add('on');}));
+}
+render();
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(z=>z.classList.remove('active'));t.classList.add('active');render(t.dataset.f);});
+</script>
+</body>
+</html>

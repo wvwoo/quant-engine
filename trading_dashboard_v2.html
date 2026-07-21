@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant OS - Institutional Grade</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        base: '#030712',      /* Ultra dark background */
+                        panel: '#0a101d',     /* Dark panel */
+                        panel_hover: '#0f172a',
+                        border_dim: '#1e293b',
+                        border_lit: '#334155',
+                        accent: '#3b82f6',    /* Electric Blue */
+                        buy: '#10b981',       /* Institutional Green */
+                        sell: '#ef4444',      /* Crimson Red */
+                        warn: '#f59e0b',      /* Amber */
+                        text_main: '#f8fafc',
+                        text_dim: '#94a3b8',
+                        text_mute: '#475569',
+                    },
+                    fontFamily: {
+                        arabic: ['"Tajawal"', 'sans-serif'],
+                        mono: ['"JetBrains Mono"', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { 
+            font-family: 'Tajawal', sans-serif; 
+            background-color: #030712; 
+            color: #f8fafc;
+            /* Subtle grid background for structural feel */
+            background-image: 
+                linear-gradient(rgba(30, 41, 59, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(30, 41, 59, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        
+        .number-font { font-family: 'JetBrains Mono', monospace; letter-spacing: -0.5px; }
+        
+        .panel {
+            background-color: rgba(10, 16, 29, 0.8);
+            border: 1px solid #1e293b;
+            backdrop-filter: blur(8px);
+            border-radius: 6px; /* Sharper corners for pro feel */
+        }
+        
+        .panel-header {
+            border-bottom: 1px solid #1e293b;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.5) 0%, rgba(10, 16, 29, 0) 100%);
+        }
+
+        /* Terminal style scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #030712; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        /* Animations */
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .status-live { animation: pulse-ring 2s infinite; }
+
+        .scanline {
+            width: 100%;
+            height: 100px;
+            z-index: 9999;
+            position: absolute;
+            pointer-events: none;
+            background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(59,130,246,0.1) 50%, rgba(0,0,0,0) 100%);
+            opacity: 0.1;
+            animation: scanline 8s linear infinite;
+        }
+        @keyframes scanline {
+            0% { top: -100px; }
+            100% { top: 100%; }
+        }
+        
+        .blinking-cursor {
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+    </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-sm relative">
+
+    <div class="scanline"></div>
+
+    <!-- Top Navigation / Status Bar -->
+    <header class="h-14 border-b border-border_dim bg-base flex items-center justify-between px-4 shrink-0 z-10">
+        <!-- Logo & Core Status -->
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-2">
+                <i data-lucide="cpu" class="h-5 w-5 text-accent"></i>
+                <h1 class="font-bold text-lg tracking-wider font-mono">QUANT<span class="text-text_mute">_OS</span></h1>
+            </div>
+            
+            <div class="h-6 w-px bg-border_dim"></div>
+            
+            <!-- Global Mode Toggles (Dense & Crisp) -->
+            <div class="flex items-center gap-1 bg-panel border border-border_dim p-0.5 rounded">
+                <button class="px-3 py-1 rounded-sm bg-buy/10 text-buy border border-buy/30 font-bold text-xs flex items-center gap-1.5 shadow-[0_0_8px_rgba(16,185,129,0.15)]">
+                    <div class="h-1.5 w-1.5 rounded-full bg-buy status-live"></div>
+                    SAFE MODE
+                </button>
+                <button class="px-3 py-1 rounded-sm text-text_dim hover:bg-border_dim transition-colors font-bold text-xs uppercase">
+                    Paper
+                </button>
+                <button class="px-3 py-1 rounded-sm text-text_dim hover:bg-border_dim transition-colors font-bold text-xs uppercase flex items-center gap-1.5">
+                    <i data-lucide="lock" class="h-3 w-3 text-sell"></i> Live Locked
+                </button>
+            </div>
+        </div>
+
+        <!-- Right Side: Clock & Environment -->
+        <div class="flex items-center gap-5 font-mono text-xs text-text_dim">
+            <div class="flex items-center gap-2">
+                <span class="text-text_mute">CPU</span>
+                <span class="text-buy">12%</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-text_mute">MEM</span>
+                <span>2.4GB</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-text_mute">PING</span>
+                <span class="text-accent">3.18ms</span>
+            </div>
+            <div class="h-4 w-px bg-border_dim"></div>
+            <div id="live-clock" class="text-text_main font-bold number-font text-sm">00:00:00 UTC</div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 overflow-hidden p-2 grid grid-cols-12 gap-2">
+        
+        <!-- Sidebar Navigation (Minimized & Icon focused) -->
+        <aside class="col-span-1 xl:col-span-1 panel flex flex-col items-center py-4 gap-4 h-full hidden md:flex">
+            <button class="p-2.5 rounded-md bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20 transition-all w-10 h-10 flex items-center justify-center relative group">
+                <i data-lucide="layout-grid" class="h-5 w-5"></i>
+                <span class="absolute right-12 bg-panel border border-border_dim px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">الرئيسية</span>
+            </button>
+            <button class="p-2.5 rounded-md text-text_mute hover:text-text_main hover:bg-border_dim transition-all w-10 h-10 flex items-center justify-center relative group">
+                <i data-lucide="shield-alert" class="h-5 w-5"></i>
+                <span class="absolute right-12 bg-panel border border-border_dim px-2 py-1 rounded text-xs opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">المخاطر (8 قواعد نشطة)</span>
+                <span class="absolute top-1 right-1 h-2 w-2 rounded-full bg-warn"></span>
+            </button>
+            <button class="p-2.5 rounded-md text-text_mute hover:text-text_main hover:bg-border_dim transition-all w-10 h-10 flex items-center justify-center relative group">
+                <i data-lucide="zap" class="h-5 w-5"></i>
+            </button>
+            <button class="p-2.5 rounded-md text-text_mute hover:text-text_main hover:bg-border_dim transition-all w-10 h-10 flex items-center justify-center relative group">
+                <i data-lucide="activity" class="h-5 w-5"></i>
+            </button>
+            
+            <div class="mt-auto flex flex-col gap-4">
+                <button class="p-2.5 rounded-md text-text_mute hover:text-text_main hover:bg-border_dim transition-all w-10 h-10 flex items-center justify-center relative group">
+                    <i data-lucide="settings" class="h-5 w-5"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Center Column (Core Metrics & Chart) -->
+        <div class="col-span-12 md:col-span-8 xl:col-span-8 flex flex-col gap-2 h-full">
+            
+            <!-- KPIs Row -->
+            <div class="grid grid-cols-4 gap-2 h-24 shrink-0">
+                <!-- KPI 1 -->
+                <div class="panel flex flex-col justify-between p-3 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 w-1 h-full bg-buy opacity-50 group-hover:opacity-100 transition-opacity"></div>
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs text-text_dim uppercase tracking-wider">Net PnL</span>
+                        <i data-lucide="trending-up" class="h-3.5 w-3.5 text-text_mute"></i>
+                    </div>
+                    <div class="flex items-baseline gap-1">
+                        <span class="text-2xl font-bold text-buy number-font">+842</span>
+                        <span class="text-xs text-text_mute mb-1">SAR</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="text-text_mute">Profit Factor</span>
+                        <span class="text-text_main number-font">1.62</span>
+                    </div>
+                </div>
+
+                <!-- KPI 2 -->
+                <div class="panel flex flex-col justify-between p-3 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 w-1 h-full bg-accent opacity-50 group-hover:opacity-100 transition-opacity"></div>
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs text-text_dim uppercase tracking-wider">Execution Latency</span>
+                        <i data-lucide="zap" class="h-3.5 w-3.5 text-text_mute"></i>
+                    </div>
+                    <div class="flex items-baseline gap-1">
+                        <span class="text-2xl font-bold text-text_main number-font">3.18</span>
+                        <span class="text-xs text-text_mute mb-1">ms</span>
+                    </div>
+                    <div class="w-full bg-border_dim h-1 mt-1 rounded-none overflow-hidden">
+                        <div class="bg-accent h-full w-[15%]"></div>
+                    </div>
+                </div>
+
+                <!-- KPI 3 -->
+                <div class="panel flex flex-col justify-between p-3 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 w-1 h-full bg-warn opacity-50 group-hover:opacity-100 transition-opacity"></div>
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs text-text_dim uppercase tracking-wider">Risk Engine</span>
+                        <i data-lucide="shield" class="h-3.5 w-3.5 text-text_mute"></i>
+                    </div>
+                    <div class="flex items-baseline gap-1 mt-1">
+                        <span class="text-sm font-bold text-warn border border-warn/30 bg-warn/10 px-2 py-0.5 rounded-sm">SHADOW</span>
+                    </div>
+                    <div class="text-[10px] text-text_mute mt-2">
+                        8 Active Rules | 0 Blocks
+                    </div>
+                </div>
+
+                <!-- KPI 4 -->
+                <div class="panel flex flex-col justify-between p-3 relative overflow-hidden group">
+                    <div class="absolute top-0 right-0 w-1 h-full bg-text_dim opacity-50 group-hover:opacity-100 transition-opacity"></div>
+                    <div class="flex justify-between items-start">
+                        <span class="text-xs text-text_dim uppercase tracking-wider">Reconciliation</span>
+                        <i data-lucide="database" class="h-3.5 w-3.5 text-text_mute"></i>
+                    </div>
+                    <div class="flex items-baseline gap-1">
+                        <span class="text-2xl font-bold text-text_main number-font">0</span>
+                        <span class="text-xs text-text_mute mb-1">Diffs</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px]">
+                        <span class="text-text_mute">Status</span>
+                        <span class="text-buy">SYNCED</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Chart Area -->
+            <div class="panel flex-1 flex flex-col overflow-hidden min-h-[300px]">
+                <div class="panel-header px-4 py-2 flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <h2 class="font-bold text-sm">Equity Curve <span class="text-text_mute font-normal">(After Costs)</span></h2>
+                        <div class="h-3 w-px bg-border_dim"></div>
+                        <div class="flex items-center gap-1 number-font text-xs">
+                            <span class="text-buy">+0.28%</span>
+                            <span class="text-text_mute">Exp</span>
+                            <span class="text-sell ml-2">-1.8%</span>
+                            <span class="text-text_mute">MaxDD</span>
+                        </div>
+                    </div>
+                    <div class="flex gap-1">
+                        <button class="px-2 py-0.5 text-[10px] bg-border_dim text-text_main rounded-sm">1D</button>
+                        <button class="px-2 py-0.5 text-[10px] text-text_mute hover:bg-border_dim rounded-sm">1W</button>
+                        <button class="px-2 py-0.5 text-[10px] text-text_mute hover:bg-border_dim rounded-sm">1M</button>
+                    </div>
+                </div>
+                
+                <!-- Terminal Style Chart Simulation -->
+                <div class="flex-1 relative p-4 flex flex-col justify-end">
+                    <!-- Y Axis Labels -->
+                    <div class="absolute left-4 top-4 bottom-4 flex flex-col justify-between text-[10px] text-text_mute number-font">
+                        <span>+1000</span>
+                        <span>+500</span>
+                        <span>0</span>
+                    </div>
+                    
+                    <!-- Line Chart SVG Simulation -->
+                    <div class="w-full h-full ml-8 border-b border-l border-border_dim relative">
+                        <svg class="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+                            <!-- Grid lines -->
+                            <line x1="0" y1="50" x2="100" y2="50" stroke="#1e293b" stroke-width="0.5" stroke-dasharray="2,2" />
+                            <line x1="0" y1="25" x2="100" y2="25" stroke="#1e293b" stroke-width="0.5" stroke-dasharray="2,2" />
+                            <line x1="0" y1="75" x2="100" y2="75" stroke="#1e293b" stroke-width="0.5" stroke-dasharray="2,2" />
+                            
+                            <!-- Graph line -->
+                            <polyline points="0,80 10,75 20,78 30,60 40,65 50,40 60,45 70,25 80,30 90,15 100,10" fill="none" stroke="#10b981" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+                            
+                            <!-- Area under line -->
+                            <polygon points="0,100 0,80 10,75 20,78 30,60 40,65 50,40 60,45 70,25 80,30 90,15 100,10 100,100" fill="url(#grad)" opacity="0.2" />
+                            
+                            <defs>
+                                <linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                    <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+                                    <stop offset="100%" style="stop-color:#10b981;stop-opacity:0" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        
+                        <!-- Current price indicator -->
+                        <div class="absolute right-0 top-[10%] flex items-center">
+                            <div class="w-2 h-px bg-buy"></div>
+                            <div class="bg-buy text-base font-bold text-[10px] px-1 py-0.5 rounded-sm ml-1 number-font animate-pulse">842.00</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Execution Terminal (Bottom Center) -->
+            <div class="panel h-48 shrink-0 flex flex-col">
+                <div class="panel-header px-4 py-2 flex justify-between items-center bg-[#0a101d]">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="terminal" class="h-4 w-4 text-text_mute"></i>
+                        <h2 class="font-bold text-sm">Execution Feed</h2>
+                    </div>
+                    <span class="text-[10px] text-buy flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-buy"></span> CONNECTED</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-2 text-xs number-font text-text_dim space-y-1">
+                    <div class="flex gap-4 hover:bg-border_dim/30 px-2 py-0.5 rounded cursor-default">
+                        <span class="text-text_mute">10:59:45.123</span>
+                        <span class="text-buy font-bold">BUY</span>
+                        <span class="text-text_main w-12">2222</span>
+                        <span>10 @ 34.50</span>
+                        <span class="ml-auto text-buy">[RISK_OK]</span>
+                    </div>
+                    <div class="flex gap-4 hover:bg-border_dim/30 px-2 py-0.5 rounded cursor-default">
+                        <span class="text-text_mute">10:55:12.842</span>
+                        <span class="text-sell font-bold">SELL</span>
+                        <span class="text-text_main w-12">1120</span>
+                        <span>5 @ 78.10</span>
+                        <span class="ml-auto text-warn">[OBSERVE]</span>
+                    </div>
+                    <div class="flex gap-4 hover:bg-border_dim/30 px-2 py-0.5 rounded cursor-default bg-warn/5">
+                        <span class="text-text_mute">10:45:00.001</span>
+                        <span class="text-warn font-bold">WARN</span>
+                        <span class="text-text_main w-12">SYS</span>
+                        <span class="text-warn/80">Symbol concentration rule triggered</span>
+                        <span class="ml-auto text-warn">[LOGGED]</span>
+                    </div>
+                    <div class="flex gap-4 hover:bg-border_dim/30 px-2 py-0.5 rounded cursor-default">
+                        <span class="text-text_mute">10:30:11.555</span>
+                        <span class="text-buy font-bold">BUY</span>
+                        <span class="text-text_main w-12">7010</span>
+                        <span>7 @ 112.40</span>
+                        <span class="ml-auto text-accent text-[10px] mt-0.5 border border-accent/30 px-1 rounded-sm">SHADOW ONLY</span>
+                    </div>
+                    <div class="flex gap-4 px-2 py-0.5">
+                        <span class="text-accent">> _<span class="blinking-cursor"></span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column (Alerts & Order Book / Depth) -->
+        <div class="col-span-12 md:col-span-3 xl:col-span-3 flex flex-col gap-2 h-full">
+            
+            <!-- Alerts Module -->
+            <div class="panel flex-1 flex flex-col">
+                <div class="panel-header px-3 py-2">
+                    <h2 class="font-bold text-sm text-warn flex items-center gap-2">
+                        <i data-lucide="alert-triangle" class="h-4 w-4"></i>
+                        Action Required
+                    </h2>
+                </div>
+                <div class="p-2 space-y-2 flex-1 overflow-y-auto">
+                    <!-- Alert Item -->
+                    <div class="border border-border_dim bg-base p-2.5 rounded-sm hover:border-accent/50 transition-colors cursor-pointer border-l-2 border-l-accent">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs font-bold text-text_main">السوق السعودي</span>
+                            <span class="text-[10px] bg-border_dim px-1 rounded text-text_mute number-font">3 ITEMS</span>
+                        </div>
+                        <p class="text-[11px] text-text_dim">مقترحات يدوية تنتظر قرارك والموافقة النهائية.</p>
+                        <div class="mt-2 flex gap-1">
+                            <button class="flex-1 bg-buy/10 text-buy border border-buy/20 text-[10px] py-1 rounded-sm hover:bg-buy hover:text-base font-bold transition-all">APPROVE</button>
+                            <button class="flex-1 bg-sell/10 text-sell border border-sell/20 text-[10px] py-1 rounded-sm hover:bg-sell hover:text-base font-bold transition-all">REJECT</button>
+                        </div>
+                    </div>
+
+                    <!-- Alert Item -->
+                    <div class="border border-border_dim bg-base p-2.5 rounded-sm border-l-2 border-l-warn">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs font-bold text-text_main">تركيز الرمز</span>
+                            <i data-lucide="eye" class="h-3 w-3 text-warn"></i>
+                        </div>
+                        <p class="text-[11px] text-text_dim">تعمل كمراقبة وسجلت 7 تجاوزات للقاعدة اليوم.</p>
+                    </div>
+
+                    <!-- Alert Item -->
+                    <div class="border border-border_dim bg-base p-2.5 rounded-sm border-l-2 border-l-sell">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs font-bold text-text_main">التنفيذ الحي</span>
+                            <i data-lucide="lock" class="h-3 w-3 text-sell"></i>
+                        </div>
+                        <p class="text-[11px] text-text_dim">مغلق حتى تفعيل إذن الحساب والمصادقة.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Market Watch / Watchlist -->
+            <div class="panel h-[40%] flex flex-col shrink-0">
+                <div class="panel-header px-3 py-2 flex justify-between items-center">
+                    <h2 class="font-bold text-sm">Watchlist (SA)</h2>
+                    <i data-lucide="search" class="h-3.5 w-3.5 text-text_mute cursor-pointer"></i>
+                </div>
+                <div class="flex flex-col flex-1">
+                    <!-- Table Header -->
+                    <div class="grid grid-cols-4 px-3 py-1.5 bg-base border-b border-border_dim text-[10px] text-text_mute uppercase number-font font-bold">
+                        <div class="col-span-1">SYM</div>
+                        <div class="col-span-1 text-right">LTP</div>
+                        <div class="col-span-1 text-right">CHG</div>
+                        <div class="col-span-1 text-center">STATUS</div>
+                    </div>
+                    <!-- Rows -->
+                    <div class="overflow-y-auto flex-1 text-xs number-font">
+                        <div class="grid grid-cols-4 px-3 py-2 border-b border-border_dim/50 hover:bg-border_dim/30">
+                            <div class="col-span-1 text-text_main">2222</div>
+                            <div class="col-span-1 text-right">34.50</div>
+                            <div class="col-span-1 text-right text-buy">+0.4%</div>
+                            <div class="col-span-1 flex justify-center"><span class="bg-buy/20 text-buy text-[9px] px-1.5 rounded-sm border border-buy/20">PASS</span></div>
+                        </div>
+                        <div class="grid grid-cols-4 px-3 py-2 border-b border-border_dim/50 hover:bg-border_dim/30">
+                            <div class="col-span-1 text-text_main">1120</div>
+                            <div class="col-span-1 text-right">78.10</div>
+                            <div class="col-span-1 text-right text-buy">+1.1%</div>
+                            <div class="col-span-1 flex justify-center"><span class="bg-warn/20 text-warn text-[9px] px-1.5 rounded-sm border border-warn/20">OBSV</span></div>
+                        </div>
+                        <div class="grid grid-cols-4 px-3 py-2 border-b border-border_dim/50 hover:bg-border_dim/30">
+                            <div class="col-span-1 text-text_main">7010</div>
+                            <div class="col-span-1 text-right">112.40</div>
+                            <div class="col-span-1 text-right text-buy">+0.2%</div>
+                            <div class="col-span-1 flex justify-center"><span class="bg-buy/20 text-buy text-[9px] px-1.5 rounded-sm border border-buy/20">PASS</span></div>
+                        </div>
+                        <div class="grid grid-cols-4 px-3 py-2 hover:bg-border_dim/30">
+                            <div class="col-span-1 text-text_main">2010</div>
+                            <div class="col-span-1 text-right">98.20</div>
+                            <div class="col-span-1 text-right text-sell">-0.3%</div>
+                            <div class="col-span-1 flex justify-center"><span class="bg-warn/20 text-warn text-[9px] px-1.5 rounded-sm border border-warn/20">WARN</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        lucide.createIcons();
+        
+        // Live Clock Script
+        function updateClock() {
+            const now = new Date();
+            const timeString = now.toISOString().split('T')[1].substring(0, 8);
+            document.getElementById('live-clock').textContent = timeString + ' UTC';
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+    </script>
+</body>
+</html>
