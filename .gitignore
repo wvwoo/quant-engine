@@ -18,6 +18,8 @@ qts_v8/state/*.db-wal
 qts_v8/state/*.db-shm
 qts_v8/state/*.json
 qts_v8/state/*.jsonl
+# session_report.md is regenerated on every run (gitignore has no inline comments)
+qts_v8/state/*.md
 
 # --- secrets: never commit. Values live in the environment. ---
 .env
