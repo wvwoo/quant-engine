@@ -28,8 +28,10 @@ from qts_core.risk import (
     ExitReason,
     Phase,
     PositionState,
+    daily_loss_breached,
     evaluate,
     open_position,
+    realized_pnl_cents,
     size_entry,
 )
 from qts_core.signals.checklist import EntryDecision, evaluate_entry
@@ -259,9 +261,9 @@ class PaperSession:
             return self._manage_exits(pos, view)
 
         # -- flat: entry path, guarded by the safety rails ----------------
-        if -realized_today >= self.cfg.daily_loss_limit_cents:
+        if daily_loss_breached(realized_today, self.cfg):
             self._snapshot_portfolio(now, view.chain)
-            return StepResult(None, (), None, halted="DAILY_LOSS_LIMIT")
+            return StepResult(None, (), None, halted=ExitReason.DAILY_LOSS_LIMIT.value)
         if now >= self.force_flat_at:
             self._snapshot_portfolio(now, view.chain)
             return StepResult(None, (), None, halted="AFTER_FORCE_FLAT")
@@ -381,10 +383,8 @@ class PaperSession:
             )
             self.store.journal_intent(intent, now)
             fill = self.broker.execute(intent, quote.bid_cents, quote.ask_cents, now)
-            realized = (
-                fill.premium_cents * CONTRACT_MULTIPLIER * order.contracts
-                - pos.cost_basis_per_contract_cents * order.contracts
-                - fill.commission_cents
+            realized = realized_pnl_cents(
+                pos, fill.premium_cents, order.contracts, fill.commission_cents
             )
             # For SELL legs fill_cost_cents stores the signed REALIZED P&L.
             pending.append((coid, fill.premium_cents, realized, fill.commission_cents))
@@ -400,8 +400,8 @@ class PaperSession:
             self.store.save_position(pos.occ_symbol, _pos_to_json(new_state), now)
         self._snapshot(view.now, view.chain, new_state)
         halt = None
-        if -self.store.realized_pnl_today(self.session_date) >= self.cfg.daily_loss_limit_cents:
-            halt = "DAILY_LOSS_LIMIT"
+        if daily_loss_breached(self.store.realized_pnl_today(self.session_date), self.cfg):
+            halt = ExitReason.DAILY_LOSS_LIMIT.value
         return StepResult(None, tuple(fills), new_state, halt)
 
     def force_flat_if_due(self, now: dt.datetime) -> StepResult | None:
@@ -456,11 +456,7 @@ class PaperSession:
         )
         self.store.journal_intent(intent, now)
         fill = self.broker.execute_unmarked_exit(intent, now)
-        realized = (
-            fill.premium_cents * CONTRACT_MULTIPLIER * pos.contracts
-            - pos.cost_basis_per_contract_cents * pos.contracts
-            - fill.commission_cents
-        )
+        realized = realized_pnl_cents(pos, fill.premium_cents, pos.contracts, fill.commission_cents)
         new_state = dataclasses.replace(
             pos,
             phase=Phase.CLOSED,

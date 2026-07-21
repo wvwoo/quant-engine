@@ -280,3 +280,134 @@ class TestStepFailureIsContained:
         assert "NVDA" in seen, "a step failure on QQQ skipped every later symbol"
         assert "[error] QQQ" in capsys.readouterr().out
         assert report.exists(), "the report must still be written after a contained failure"
+
+
+class TestUnknownSymbolIsContained:
+    """The N-08 fail-loud KeyError must obey the N-06 containment rule: one
+    unconfigured symbol costs THAT symbol, never the pass. Without this,
+    --symbols AAPL,SPY died on AAPL before SPY ever ran — and an open SPY
+    position went unmanaged, which is the exact hazard N-02 closed."""
+
+    def test_unknown_symbol_skips_but_the_rest_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--symbols", "AAPL,NVDA"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "[error] AAPL" in out
+        assert "tick schedule" in out
+        assert "--- NVDA ---" in out, "an unconfigured symbol killed the whole pass"
+        assert "[decision] NVDA" in out
+
+
+class TestStrandedWarningSurvivesWeekends:
+    """Review finding F4: the N-03 warning's comment said 'every run' but the
+    non-trading-day early return skipped it — the one day an owner reviews
+    state at leisure was the one day the warning went silent."""
+
+    def test_warning_prints_on_a_non_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        store = StateStore(db)
+        stale = "NVDA260616C00205000"
+        store.save_position(
+            stale,
+            {
+                "symbol": "NVDA",
+                "occ_symbol": stale,
+                "phase": "OPEN",
+                "contracts": 2,
+                "entry_quote_cents": 420,
+                "cost_basis_per_contract_cents": 42400,
+                "peak_premium_cents": 420,
+                "realized_pnl_cents": 0,
+            },
+            dt.datetime(2026, 6, 16, 15, 0, tzinfo=NY),
+        )
+        store.close()
+
+        class SaturdayClock(FakeClock):
+            def session_date(self) -> dt.date:
+                return dt.date(2026, 6, 20)
+
+        monkeypatch.setattr(live, "TradingClock", SaturdayClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        rc = live.main(["--db", str(db)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "expired UNSETTLED" in out
+        assert stale in out
+
+    def test_no_db_is_not_invented_on_a_weekend(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class SaturdayClock(FakeClock):
+            def session_date(self) -> dt.date:
+                return dt.date(2026, 6, 20)
+
+        monkeypatch.setattr(live, "TradingClock", SaturdayClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        db = tmp_path / "never" / "p.db"
+        assert live.main(["--db", str(db)]) == 0
+        assert not db.exists(), "a warning pass must not create state"
+
+
+class TestConfigGapDoesNotStrandItsOwnPosition:
+    """Review F2 (confirmed at HEAD): the KeyError containment `continue`d
+    BEFORE the session was built, so the unconfigured symbol's OWN open
+    position lost its exits AND its force-flat — a config problem stranding a
+    position, which ADR-008 forbids. The unmarked force-flat needs no tick
+    schedule at all, so a strand-free handling was always available."""
+
+    def _open_position_for(self, db: Path, symbol: str, occ: str) -> None:
+        store = StateStore(db)
+        store.save_position(
+            occ,
+            {
+                "symbol": symbol,
+                "occ_symbol": occ,
+                "phase": "OPEN",
+                "contracts": 2,
+                "entry_quote_cents": 420,
+                "cost_basis_per_contract_cents": 42400,
+                "peak_premium_cents": 420,
+                "realized_pnl_cents": 0,
+            },
+            dt.datetime(2026, 6, 17, 10, 30, tzinfo=NY),
+        )
+        store.close()
+
+    def test_unconfigured_symbol_still_force_flats_after_the_bell(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = tmp_path / "p.db"
+        occ = "AAPL260617C00200000"  # today's expiry, position opened earlier
+        self._open_position_for(db, "AAPL", occ)
+
+        class LateClock(FakeClock):
+            def now_utc(self) -> dt.datetime:
+                return dt.datetime(2026, 6, 17, 15, 35, tzinfo=NY).astimezone(dt.UTC)
+
+        monkeypatch.setattr(live, "TradingClock", LateClock)
+        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s))
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+        rc = live.main(["--db", str(db), "--symbols", "AAPL"])
+        assert rc == 0
+        store = StateStore(db)
+        sells = [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"]
+        assert len(sells) == 1, "the config gap stranded the symbol's own position"
+        assert sells[0]["reason"] == "FORCE_FLAT_UNMARKED"
+        assert store.open_positions(as_of=SESSION) == {}
+
+    def test_before_the_bell_the_position_is_left_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "p.db"
+        occ = "AAPL260617C00200000"
+        self._open_position_for(db, "AAPL", occ)
+        _wire(monkeypatch, lambda s: FakeSource(s))  # clock at 10:15
+        live.main(["--db", str(db), "--symbols", "AAPL"])
+        store = StateStore(db)
+        assert [o for o in store.orders_for_session(SESSION) if o["side"] == "SELL"] == []

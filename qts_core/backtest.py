@@ -29,7 +29,14 @@ from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
 from qts_core.money import BP, CONTRACT_MULTIPLIER
 from qts_core.pricing import bs_price
-from qts_core.risk import Phase, evaluate, open_position, size_entry
+from qts_core.risk import (
+    Phase,
+    daily_loss_breached,
+    evaluate,
+    open_position,
+    realized_pnl_cents,
+    size_entry,
+)
 from qts_core.signals.checklist import evaluate_entry
 
 
@@ -151,10 +158,11 @@ def run_session(
                     # trigger, the fill is the gapped price, not the level we
                     # wished for. Selling always takes the worse of the two.
                     fill_px = min(o.trigger_premium_cents, mark)
-                    pnl = (
-                        fill_px * CONTRACT_MULTIPLIER * o.contracts
-                        - position.cost_basis_per_contract_cents * o.contracts
-                        - cfg.commission_per_contract_cents * o.contracts
+                    pnl = realized_pnl_cents(
+                        position,
+                        fill_px,
+                        o.contracts,
+                        cfg.commission_per_contract_cents * o.contracts,
                     )
                     realized += pnl
                     trade_realized += pnl
@@ -185,9 +193,16 @@ def run_session(
             equity_marks.append((now, realized))
             continue
 
-        # --- flat: look for an entry on this COMPLETED bar ---------------
+        # --- flat: entry path, guarded by the SAME safety rails as the
+        # paper loop (N-04). Without them the backtest measured a strategy
+        # that is not the one that runs: unlimited re-entry after stop-outs
+        # and full-mandate sizing forever — ~3x the loss the live loop would
+        # allow on a bad day, silently poisoning every published metric.
         if i + 1 >= len(sess.bars):
             break  # no next bar to fill at — decision would be unfillable
+        if daily_loss_breached(realized, cfg):
+            equity_marks.append((now, realized))
+            continue
         chain = _synthetic_chain(sess, now, bar.close, cfg)
         view = MarketView(
             now=now,
@@ -204,7 +219,10 @@ def run_session(
             continue
         signals += 1
         sel = decision.selection
-        sized = size_entry(cfg, sel.quote.ask_cents, tick)
+        # QTS-4 parity: size against what the session still has, not a
+        # constant mandate (paper.py does exactly this).
+        capital = min(cfg.sub_portfolio_cents, cfg.sub_portfolio_cents + realized)
+        sized = size_entry(cfg, sel.quote.ask_cents, tick, capital)
         if sized.contracts == 0:
             equity_marks.append((now, realized))
             continue
@@ -225,7 +243,11 @@ def run_session(
             symbol=sess.symbol,
             occ_symbol=sel.quote.occ_symbol,
             contracts=sized.contracts,
-            entry_quote_cents=fill_premium,
+            # ADR-004 (N-11): levels derive from the QUOTED ask at decision
+            # time, exactly as the live rule computes them. The modeled
+            # next-bar-open premium is a FILL price — spread stripped — and
+            # feeding it here conflated the two bases ADR-004 separates.
+            entry_quote_cents=sel.quote.ask_cents,
             fill_cost_per_contract_cents=slipped * CONTRACT_MULTIPLIER
             + cfg.commission_per_contract_cents,
         )
@@ -244,10 +266,11 @@ def run_session(
             sess.atm_iv,
             cfg.risk_free_rate,
         )
-        pnl = (
-            mark * CONTRACT_MULTIPLIER * position.contracts
-            - position.cost_basis_per_contract_cents * position.contracts
-            - cfg.commission_per_contract_cents * position.contracts
+        pnl = realized_pnl_cents(
+            position,
+            mark,
+            position.contracts,
+            cfg.commission_per_contract_cents * position.contracts,
         )
         realized += pnl
         trade_realized += pnl
@@ -334,6 +357,13 @@ def run_backtest(sessions: list[SessionData], cfg: StrategyConfig) -> BacktestRe
             "entry_fill": f"next bar open +{cfg.sizing_slippage_buffer_bp}bp slippage, tick-legal",
             "intrabar_path": "conservative: stop at bar low evaluated before target at bar high",
             "commission": f"{cfg.commission_per_contract_cents}c/contract/side",
+            "safety_rails": "ADR-008 rails applied AS IN THE PAPER LOOP: the "
+            "daily loss limit blocks re-entry and realized losses shrink entry "
+            "capital (QTS-4). Absent until N-04 — earlier runs measured a "
+            "strategy without them.",
+            "entry_quote": "risk levels derive from the decision-bar QUOTED ask "
+            "(ADR-004); the fill and cost basis use next-bar-open premium "
+            "+ slippage",
             "max_drawdown": "computed on REALIZED equity only; open-position "
             "mark-to-market excursions are not included (understates intraday DD)",
         },

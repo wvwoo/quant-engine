@@ -165,6 +165,13 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = StrategyConfig()
     require_paper_mode(cfg)  # BOOT gate: before the clock, the network, any output
+    try:
+        cfg.tick_schedule_for(args.symbol)
+    except KeyError as exc:
+        # Fail BEFORE the network with the actionable message, not a traceback
+        # after fetching a month of bars (N-08 containment).
+        print(f"[halt] {exc.args[0]}")
+        return 2
     now = TradingClock.system().now_utc()
     sessions = build_sessions(args.symbol, args.days, cfg, now)
     # Compare against the CONFIGURED default, not a second copy of the literal:

@@ -126,6 +126,32 @@ def render_session_report(store: StateStore, cfg: StrategyConfig, session_date: 
         add(f"| **{name}** | {value} | {PROVENANCE[key][0].value} |")
     add("")
 
+    expired = store.expired_positions(as_of=session_date)
+    if expired:
+        # N-03: "reported, never silently settled" was a promise with zero
+        # callers. We do not own assignment data, so nothing is fabricated —
+        # but realized P&L sums SELL legs only, so an unsold position's basis
+        # is absent from every P&L figure below. Say so, with the number.
+        add("## ⚠️ EXPIRED / UNSETTLED POSITIONS")
+        add("")
+        add("| OCC | Contracts | Basis committed |")
+        add("| :-- | :-- | :-- |")
+        stranded = 0
+        for occ in sorted(expired):
+            state = expired[occ]
+            contracts = int(str(state.get("contracts", 0)))
+            basis = int(str(state.get("cost_basis_per_contract_cents", 0)))
+            stranded += basis * contracts
+            add(f"| `{occ}` | {contracts} | {fmt(basis * contracts)} |")
+        add("")
+        add(
+            f"> **{fmt(stranded)} of committed basis is NOT reflected in the realized "
+            "P&L below.** These 0DTE rows expired without a closing order; pricing an "
+            "assignment needs data this system does not own, so they are reported — "
+            "never silently settled. Resolving them is an owner action."
+        )
+        add("")
+
     add("## 📈 SESSION P&L (PAPER, MODELED)")
     add("")
     add(f"* **Realized P&L today:** **{fmt(realized)}**")

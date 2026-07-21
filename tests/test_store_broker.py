@@ -219,3 +219,75 @@ class TestCrossSessionLedgerIsDisplayOnly:
         after_profit = size_entry(CFG, 420, TickSchedule.PENNY_PROGRAM)
         assert flat.contracts == after_profit.contracts
         assert flat.gross_committed_cents <= CFG.sub_portfolio_cents
+
+
+class _FlakyConn:
+    """Delegates to a real connection but fails chosen statements once —
+    the only way to reach the COMMIT/ROLLBACK error paths without a full disk."""
+
+    def __init__(self, real: object, fail_on: str) -> None:
+        self._real = real
+        self._fail_on = fail_on
+        self.failed_once = False
+
+    def execute(self, sql: str, *args: object):  # type: ignore[no-untyped-def]
+        if sql.strip().upper().startswith(self._fail_on) and not self.failed_once:
+            self.failed_once = True
+            import sqlite3
+
+            raise sqlite3.OperationalError(f"injected failure on {self._fail_on}")
+        return self._real.execute(sql, *args)  # type: ignore[attr-defined]
+
+    def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+        return getattr(self._real, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # Review finding F4: reads were delegated but WRITES were not, so a
+        # StateStore method setting row_factory would set it on the wrapper
+        # and silently change behavior under test. Own fields stay local.
+        if name in ("_real", "_fail_on", "failed_once"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._real, name, value)
+
+
+class TestTransactionSurvivesItsOwnFailures:
+    """N-07: COMMIT sat outside the try. A COMMIT failure (full disk, BUSY)
+    propagated with the write transaction still OPEN, so every later
+    transaction() died with 'cannot start a transaction within a transaction'
+    while the WAL lock starved other processes. And ROLLBACK was unguarded
+    inside the except block — its own failure REPLACED the original exception,
+    destroying the diagnosis. 'All-or-nothing' was the promise; the commit
+    path did not keep it."""
+
+    def test_commit_failure_does_not_wedge_the_connection(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        store = StateStore(tmp_path / "s.db")
+        store._conn = _FlakyConn(store._conn, fail_on="COMMIT")  # type: ignore[assignment]
+        with pytest.raises(sqlite3.OperationalError, match="injected"), store.transaction():
+            store.journal_intent(intent(seq=0), NOW)
+        # The failed transaction must have been rolled back, not left open:
+        with store.transaction():
+            assert store.journal_intent(intent(seq=1), NOW) is True
+        assert store.order_status(intent(seq=1).client_order_id) == "INTENT"
+        # And the write that failed to commit is NOT half-present.
+        assert store.order_status(intent(seq=0).client_order_id) is None
+
+    def test_rollback_failure_does_not_mask_the_original_error(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        store._conn = _FlakyConn(store._conn, fail_on="ROLLBACK")  # type: ignore[assignment]
+        with pytest.raises(ValueError, match="the real bug"), store.transaction():
+            raise ValueError("the real bug")
+
+    def test_nesting_fails_loud_and_clear(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        with (
+            pytest.raises(RuntimeError, match="not reentrant"),
+            store.transaction(),
+            store.transaction(),
+        ):
+            pass  # pragma: no cover
+        # and the outer rollback left the connection usable
+        with store.transaction():
+            store.journal_intent(intent(seq=2), NOW)

@@ -31,6 +31,7 @@ from qts_core.clock import (
     session_open_et,
 )
 from qts_core.config import StrategyConfig, require_paper_mode
+from qts_core.money import TickSchedule
 from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
@@ -64,6 +65,17 @@ def main(argv: list[str] | None = None) -> int:
     session_date = clock.session_date()
 
     if not is_trading_day(session_date):
+        # Review finding F4: the [WARN] below claimed "every run" while this
+        # early return skipped it on non-trading days — exactly when an owner
+        # doing weekend housekeeping is most likely to look. Warn here too if
+        # the db already exists (never create one just to say it is empty).
+        if Path(args.db).exists():
+            weekend_store = StateStore(args.db)
+            try:
+                for occ in sorted(weekend_store.expired_positions(as_of=session_date)):
+                    print(f"[WARN] {occ}: expired UNSETTLED — owner action required.")
+            finally:
+                weekend_store.close()
         print(f"[halt] {session_date} is not an XNYS session — nothing to do")
         return 0
 
@@ -78,15 +90,57 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(args.db)
 
+    # N-03: a position that expired without a closing order is invisible to
+    # realized P&L (which sums SELL legs). The operator must SEE it, every
+    # run, until it is resolved — not discover it in a disagreeing equity row.
+    stranded = store.expired_positions(as_of=session_date)
+    for occ in sorted(stranded):
+        state = stranded[occ]
+        print(
+            f"[WARN] {occ}: expired UNSETTLED — "
+            f"{state.get('contracts')} contract(s), basis not in realized P&L. "
+            "Owner action required."
+        )
+
     for symbol in symbols:
         print(f"--- {symbol} ---")
+        # tick_schedule_for fails loud on unknown symbols (N-08) — but a
+        # config gap on ONE symbol must cost that symbol, never the pass
+        # (N-06): the next symbol may be holding a position that needs its
+        # exits managed.
+        try:
+            tick = cfg.tick_schedule_for(symbol)
+        except KeyError as exc:
+            print(f"[error] {symbol}: {exc.args[0]}")
+            # Review F2: `continue` alone stranded the symbol's OWN open
+            # position — a config problem must never leave a 0DTE contract
+            # unmanaged (ADR-008). The unmarked force-flat books zero
+            # proceeds and NEVER touches the tick schedule, so the rescue
+            # session's placeholder schedule is provably irrelevant to the
+            # only operation reachable from here.
+            rescue = PaperSession(
+                store,
+                PaperBroker(cfg, TickSchedule.FULL_PENNY),  # placeholder; unused
+                cfg,
+                session_date=session_date,
+                session_open_et=session_open_et(session_date),
+                force_flat_at=force_flat,
+                symbol=symbol,
+            )
+            forced = _guarded(symbol, rescue.force_flat_if_due, now)
+            if forced is not None and forced.fills:
+                print(
+                    f"[force-flat/UNMARKED] {symbol}: liquidated at worst-case "
+                    "zero proceeds — symbol has no tick schedule"
+                )
+            continue
         # The session is built BEFORE the provider is consulted, because the
         # safety rail must not depend on the data feed (N-02): a throttled or
         # unavailable provider is exactly when an open position most needs
         # flattening, and the old loop `continue`d past step() in that case.
         session = PaperSession(
             store,
-            PaperBroker(cfg, cfg.tick_schedule_for(symbol)),
+            PaperBroker(cfg, tick),
             cfg,
             session_date=session_date,
             session_open_et=session_open_et(session_date),

@@ -48,9 +48,23 @@ class TestDefaults:
         assert cfg.tranche1_gain_bp == 10_000
         assert cfg.trailing_bp == 1_200
 
-    def test_unknown_symbol_gets_coarsest_ticks(self) -> None:
-        assert StrategyConfig().tick_schedule_for("TSLA") is TickSchedule.NICKEL
+    def test_unknown_symbol_fails_loud(self) -> None:
+        """DELIBERATE behaviour change (N-08). The old contract guessed NICKEL
+        for unknown symbols and its comment claimed the guess 'only costs
+        granularity'. Measured: floor(3c, NICKEL) == 0 — a sell-side price of
+        1-4 cents floors to ZERO, so a misclassified penny-program symbol
+        (AAPL is one) books a fabricated 100% loss at force-flat and renders
+        a $0.00 fill in the ledger for a leg that filled. A wrong guess that
+        corrupts money is worse than no guess: unknown symbols now raise with
+        the exact fix in the message."""
+        import pytest
+
+        with pytest.raises(KeyError, match="tick_schedules"):
+            StrategyConfig().tick_schedule_for("TSLA")
+
+    def test_known_symbols_still_resolve_case_insensitively(self) -> None:
         assert StrategyConfig().tick_schedule_for("spy") is TickSchedule.FULL_PENNY
+        assert StrategyConfig().tick_schedule_for("NVDA") is TickSchedule.PENNY_PROGRAM
 
 
 class TestLiveTradingGate:
