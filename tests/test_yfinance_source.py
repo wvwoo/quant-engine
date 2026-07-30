@@ -16,6 +16,8 @@ import pytest
 
 from qts_core.cache import DiskCache
 from qts_core.clock import NY
+from qts_core.config import StrategyConfig
+from qts_core.providers import yfinance_source as yfs
 from qts_core.providers.yfinance_source import YFinanceSource
 
 SESSION = dt.date(2026, 6, 17)
@@ -223,3 +225,88 @@ class TestBuildView:
         assert view.bars == ()
         assert view.chain == ()
         assert view.underlying_last is None
+
+
+class TestRequestIntervalIsValidatedAtUseNotImport:
+    """A-02. QTS_MIN_REQUEST_INTERVAL_S was the ONE env var read at module
+    import: `_LIMITER = RateLimiter(float(os.environ.get(...)))` at column 1.
+    live.py and run_backtest.py both import this module unconditionally, so a
+    value like "1,5" (a comma decimal separator — entirely plausible for an
+    operator on an Arabic or European locale) raised a bare ValueError from
+    provider internals before argparse, before require_paper_mode, before even
+    `--help` could render. It also had zero test coverage."""
+
+    def test_absent_falls_back_to_the_config_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("QTS_MIN_REQUEST_INTERVAL_S", raising=False)
+        assert yfs.request_interval_s() == StrategyConfig().min_request_interval_s
+
+    def test_empty_string_is_treated_as_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", "")
+        assert yfs.request_interval_s() == StrategyConfig().min_request_interval_s
+
+    @pytest.mark.parametrize(("raw", "expected"), [("0", 0.0), ("2", 2.0), ("0.25", 0.25)])
+    def test_valid_values_parse(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: float
+    ) -> None:
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", raw)
+        assert yfs.request_interval_s() == expected
+
+    @pytest.mark.parametrize("raw", ["1,5", "abc", "1.2.3", "1s", "nan", "inf", "-1"])
+    def test_bad_values_raise_a_named_error_naming_the_variable(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", raw)
+        with pytest.raises(yfs.InvalidRequestInterval) as exc:
+            yfs.request_interval_s()
+        msg = str(exc.value)
+        assert "QTS_MIN_REQUEST_INTERVAL_S" in msg, "the operator must know WHICH var"
+        assert raw in msg, "the operator must see what they actually set"
+
+    def test_importing_the_module_with_a_bad_value_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression itself: import must survive a malformed value so the
+        CLI can start, parse args and report the problem in its own words."""
+        import importlib
+
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", "1,5")
+        importlib.reload(yfs)  # would raise ValueError before this fix
+        assert yfs.YFinanceSource  # module usable
+
+    def test_live_and_run_backtest_still_import_with_a_bad_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both entry points import the provider at top level; neither may die
+        on an env typo before it can print a diagnosis."""
+        import importlib
+
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", "not-a-number")
+        importlib.reload(yfs)
+        import qts_core.live as _live
+        import qts_core.run_backtest as _rb
+
+        assert importlib.reload(_live).main
+        assert importlib.reload(_rb).main
+
+    def test_the_limiter_is_shared_per_process(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Yahoo throttles per client, so a per-source limiter would let a
+        3-symbol run fire 3x the rate. Memoised, not per-instance."""
+        monkeypatch.delenv("QTS_MIN_REQUEST_INTERVAL_S", raising=False)
+        yfs.reset_limiter()
+        assert yfs.limiter() is yfs.limiter()
+
+    def test_a_bad_value_surfaces_when_the_limiter_is_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", "oops")
+        yfs.reset_limiter()
+        with pytest.raises(yfs.InvalidRequestInterval):
+            yfs.limiter()
+
+
+class TestDeadReExportIsGone:
+    def test_ny_tz_alias_removed(self) -> None:
+        """`NY_TZ = NY  # re-export for CLI convenience` had zero importers
+        repo-wide; the comment asserted a consumer that did not exist. Removed
+        before the Protocol extraction could enshrine it in the public surface."""
+        assert not hasattr(yfs, "NY_TZ")

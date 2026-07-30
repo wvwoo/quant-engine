@@ -21,7 +21,7 @@ import os
 from typing import Any
 
 from qts_core.cache import DiskCache, RateLimiter
-from qts_core.clock import NY, to_et
+from qts_core.clock import to_et
 from qts_core.config import StrategyConfig
 from qts_core.models import Bar, MarketView, OptionQuote
 from qts_core.money import MoneyError, cents_from_quote
@@ -124,13 +124,65 @@ def quotes_from_chain_rows(
     return sorted(typed[:max_strikes_around_atm], key=lambda q: q.strike_cents)
 
 
-# One shared limiter per process: Yahoo throttles per client, not per symbol,
-# so a per-source limiter would let a 3-symbol run fire 3x the rate. The
-# default comes from config (provenance-tagged); the env var stays as a slow-
-# link override.
-_LIMITER = RateLimiter(
-    float(os.environ.get("QTS_MIN_REQUEST_INTERVAL_S", StrategyConfig().min_request_interval_s))
-)
+INTERVAL_ENV = "QTS_MIN_REQUEST_INTERVAL_S"
+
+
+class InvalidRequestInterval(ValueError):
+    """QTS_MIN_REQUEST_INTERVAL_S is set to something that is not a delay."""
+
+
+def request_interval_s(cfg: StrategyConfig | None = None) -> float:
+    """Resolve the client-side call spacing, validating at USE time.
+
+    A-02: this parse used to live in a module-level assignment, so a malformed
+    value raised a bare `ValueError: could not convert string to float: '1,5'`
+    at IMPORT — and both live.py and run_backtest.py import this module
+    unconditionally at top level. The failure therefore landed before argparse,
+    before require_paper_mode(), and before `--help` could even render, blaming
+    a provider internal for what is an operator typo. A comma decimal separator
+    is not exotic; it is the default on many locales.
+
+    The default still comes from config (provenance-tagged); the env var remains
+    the slow-link override it was documented to be.
+    """
+    raw = os.environ.get(INTERVAL_ENV)
+    default = (cfg if cfg is not None else StrategyConfig()).min_request_interval_s
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise InvalidRequestInterval(
+            f"{INTERVAL_ENV}={raw!r} is not a number. Give seconds as a plain decimal "
+            f"with a dot, e.g. {INTERVAL_ENV}=1.5 — or unset it to use the configured "
+            f"default of {default}s"
+        ) from None
+    if not math.isfinite(value) or value < 0:
+        raise InvalidRequestInterval(
+            f"{INTERVAL_ENV}={raw!r} is not a usable delay: it must be a finite number "
+            f"of seconds >= 0 — or unset it to use the default of {default}s"
+        )
+    return value
+
+
+# One shared limiter per process: Yahoo throttles per client, not per symbol, so
+# a per-source limiter would let a 3-symbol run fire 3x the rate. Built lazily
+# and memoised, which keeps the shared-per-process property while moving the env
+# parse off the import path.
+_LIMITER: RateLimiter | None = None
+
+
+def limiter() -> RateLimiter:
+    global _LIMITER
+    if _LIMITER is None:
+        _LIMITER = RateLimiter(request_interval_s())
+    return _LIMITER
+
+
+def reset_limiter() -> None:
+    """Drop the memoised limiter (tests, and doctor's re-check)."""
+    global _LIMITER
+    _LIMITER = None
 
 
 class YFinanceSource:
@@ -157,7 +209,7 @@ class YFinanceSource:
     def _ticker(self):  # type: ignore[no-untyped-def]
         import yfinance as yf
 
-        _LIMITER.acquire()
+        limiter().acquire()
         return yf.Ticker(self.symbol)
 
     def expirations(self, session_date: dt.date | None = None) -> list[dt.date]:
@@ -233,6 +285,3 @@ class YFinanceSource:
             underlying_last=spot,
             meta={"symbol": self.symbol, "provider": "yfinance", "delayed": "true"},
         )
-
-
-NY_TZ = NY  # re-export for CLI convenience
