@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import json
+import math
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -82,7 +83,15 @@ CREATE TABLE IF NOT EXISTS decisions (
     ts              TEXT NOT NULL,
     symbol          TEXT NOT NULL,
     approved        INTEGER NOT NULL,
-    decision_json   TEXT NOT NULL
+    decision_json   TEXT NOT NULL,
+    -- A-06: the age of the newest bar at decision time, in minutes.
+    -- NULLABLE and OUTSIDE decision_json on purpose. The golden ledger is built
+    -- from decisions_for_session(), which SELECTs four named columns, so adding
+    -- one here cannot move a golden byte. Putting it inside the JSON blob would
+    -- have changed every golden fixture.
+    -- NULL means "not measured or not finite" (e.g. a view with zero bars);
+    -- the halt reason records that case, and a distribution wants finite samples.
+    data_age_min    REAL
 );
 """
 
@@ -141,7 +150,26 @@ class StateStore:
         self._conn.execute("PRAGMA fullfsync=ON")  # F_FULLFSYNC on macOS/APFS
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._in_txn = False  # nesting guard; see transaction()
+
+    def _migrate(self) -> None:
+        """Bring an EXISTING database up to the current schema.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so adding
+        a column to _SCHEMA does nothing for any database already on disk. Every
+        test uses a fresh tmp_path db and so passed happily, while the only
+        database that actually matters — the owner's paper.db, carrying two live
+        sessions and 121 decisions — raised `sqlite3.OperationalError: no such
+        column: data_age_min` on the first real run of `qts doctor`. Tests green,
+        artifact broken. That asymmetry is why this method exists.
+
+        Additive and idempotent: new NULLABLE columns only, so an older build can
+        still read a migrated file. Nothing is ever dropped or retyped.
+        """
+        have = {row[1] for row in self._conn.execute("PRAGMA table_info(decisions)")}
+        if "data_age_min" not in have:
+            self._conn.execute("ALTER TABLE decisions ADD COLUMN data_age_min REAL")
 
     def close(self) -> None:
         self._conn.close()
@@ -380,13 +408,52 @@ class StateStore:
         ).fetchall()
 
     def log_decision(
-        self, now: dt.datetime, session_date: dt.date, symbol: str, approved: bool, blob: str
+        self,
+        now: dt.datetime,
+        session_date: dt.date,
+        symbol: str,
+        approved: bool,
+        blob: str,
+        data_age_min: float | None = None,
     ) -> None:
-        self._conn.execute(
-            "INSERT INTO decisions (session_date, ts, symbol, approved, decision_json)"
-            " VALUES (?,?,?,?,?)",
-            (session_date.isoformat(), now.isoformat(), symbol, int(approved), blob),
+        """Record one reasoned decision, and how stale the data behind it was.
+
+        A-06: `data_age_min` was computed on every step and written NOWHERE — its
+        only consumer was a print(). The documented reason for keeping
+        staleness_gate_enabled OFF is "so the threshold can be chosen from data
+        rather than guessed", and after two full live sessions there were zero
+        samples on disk: the schema had no column and the loop's stdout was gone.
+        The premise for leaving a safety rail off could not be discharged.
+
+        Defaults to None so every existing caller keeps working unchanged.
+        """
+        finite = (
+            float(data_age_min)
+            if data_age_min is not None and math.isfinite(data_age_min)
+            else None
         )
+        self._conn.execute(
+            "INSERT INTO decisions"
+            " (session_date, ts, symbol, approved, decision_json, data_age_min)"
+            " VALUES (?,?,?,?,?,?)",
+            (session_date.isoformat(), now.isoformat(), symbol, int(approved), blob, finite),
+        )
+
+    def data_age_samples(self, session_date: dt.date) -> list[tuple[str, str, float]]:
+        """(ts, symbol, age_min) for every decision that recorded a finite age.
+
+        Feeds `qts doctor` and the owner's staleness-threshold decision. Rows
+        with a NULL age are excluded rather than coerced: a fabricated zero would
+        pull the distribution toward "fresh" precisely when there was no data.
+        """
+        return [
+            (str(ts), str(sym), float(age))
+            for ts, sym, age in self._conn.execute(
+                "SELECT ts, symbol, data_age_min FROM decisions"
+                " WHERE session_date=? AND data_age_min IS NOT NULL ORDER BY id",
+                (session_date.isoformat(),),
+            ).fetchall()
+        ]
 
     def decisions_for_session(self, session_date: dt.date) -> list[tuple[str, str, int, str]]:
         return self._conn.execute(

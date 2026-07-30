@@ -4,6 +4,23 @@ version = "0.1.0"
 description = "0DTE options checklist engine: signals, risk, paper trading. Real trading is owner-gated OFF."
 requires-python = ">=3.14"
 
+[project.scripts]
+# `qts` after `pip install -e .`. The repo ALSO ships an executable ./qts shim
+# that works with nothing installed, because a fresh clone has no console
+# scripts and the CLI must not depend on a packaging step having happened.
+qts = "qts_core.cli:main"
+
+[build-system]
+# There was no build-system at all: the project ran purely from the repo root
+# via pytest's pythonpath and `python -m`. A console script needs one.
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# EXPLICIT package list. Auto-discovery on this flat layout would trip over
+# tests/, dashboard/, archive/ and qts_v8/ and refuse to build.
+packages = ["qts_core", "qts_core.providers", "qts_core.signals"]
+
 [tool.pytest.ini_options]
 # --disable-socket bans the wire; --allow-unix-socket re-permits AF_UNIX only.
 # FastAPI's TestClient runs the app in-process and asyncio's event loop needs a

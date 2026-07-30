@@ -1,0 +1,10 @@
+#!/bin/sh
+# Zero-install front door: `./qts <command>`.
+#
+# pyproject.toml also declares `qts` as a [project.scripts] console script, but
+# that only exists after `pip install -e .`. This shim works in a fresh clone
+# with nothing installed, which is the state a new machine is actually in — and
+# it keeps the CLI from depending on a packaging step having happened.
+set -eu
+cd "$(dirname "$0")"
+exec "${PY:-.venv/bin/python}" -m qts_core.cli "$@"

@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,9 +84,18 @@ def _bar_age_min(view: MarketView) -> float | None:
     This is the only honest staleness signal available. OptionQuote.received_at
     records when WE fetched, not how old the exchange data is, so any gate
     built on it would measure our own latency and call it market freshness.
+
+    A-08: an EMPTY view returns math.inf, not None. The gate reads
+    `age_min is not None and age_min > max_bar_age_min`, so returning None for
+    zero bars meant the most extreme case of unusable data — no bars at all —
+    skipped the staleness gate entirely and fell through to evaluate_entry,
+    which then logged a full "decision" whose every check value was n/a. Of the
+    121 decisions recorded in two live sessions, 31 contain such an n/a check.
+    Infinity is the honest answer to "how old is the newest bar" when there is
+    no newest bar, and it makes the gate fire instead of abstain.
     """
     if not view.bars:
-        return None
+        return math.inf
     return (view.now - view.bars[-1].ts_close).total_seconds() / 60.0
 
 
@@ -284,13 +294,22 @@ class PaperSession:
                 None,
                 (),
                 None,
-                halted=f"STALE_DATA:{age_min:.1f}m>{self.cfg.max_bar_age_min}m",
+                halted=(
+                    "STALE_DATA:NO_BARS"
+                    if not math.isfinite(age_min)
+                    else f"STALE_DATA:{age_min:.1f}m>{self.cfg.max_bar_age_min}m"
+                ),
                 data_age_min=age_min,
             )
 
         decision = evaluate_entry(view, self.cfg, self.session_open_et)
         self.store.log_decision(
-            now, self.session_date, decision.symbol, decision.approved, _decision_blob(decision)
+            now,
+            self.session_date,
+            decision.symbol,
+            decision.approved,
+            _decision_blob(decision),
+            data_age_min=age_min,
         )
         if not decision.approved or decision.selection is None:
             self._snapshot_portfolio(now, view.chain)

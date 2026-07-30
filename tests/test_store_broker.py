@@ -4,6 +4,7 @@ kill -9 at any instant + restart => no duplicate order, no lost position."""
 from __future__ import annotations
 
 import datetime as dt
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -314,3 +315,124 @@ class TestOneDbOneBackend:
         store.assert_backend("model")
         with pytest.raises(BackendMismatchError, match="fresh --db"):
             store.assert_backend("alpaca_paper")
+
+
+class TestDataAgePersistence:
+    """A-06. `data_age_min` was measured on every step and stored NOWHERE: its
+    only consumer was a print(). The documented justification for leaving
+    staleness_gate_enabled OFF is "so the threshold can be chosen from data
+    rather than guessed" — yet after two full live sessions there were zero
+    samples on disk, because the schema had no column and the loop's stdout was
+    gone. A safety rail cannot stay off for a reason that cannot be discharged."""
+
+    def test_a_finite_age_is_persisted_and_readable(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        store.log_decision(NOW, SESSION, "SPY", False, "{}", data_age_min=4.2)
+        assert store.data_age_samples(SESSION) == [(NOW.isoformat(), "SPY", 4.2)]
+        store.close()
+
+    def test_the_argument_is_optional_so_existing_callers_are_unaffected(
+        self, tmp_path: Path
+    ) -> None:
+        store = StateStore(tmp_path / "s.db")
+        store.log_decision(NOW, SESSION, "SPY", False, "{}")
+        assert store.data_age_samples(SESSION) == []
+        store.close()
+
+    def test_a_non_finite_age_is_stored_as_null_not_coerced_to_zero(self, tmp_path: Path) -> None:
+        """A fabricated 0.0 would drag the distribution toward 'fresh' exactly
+        when there was no data at all."""
+        store = StateStore(tmp_path / "s.db")
+        store.log_decision(NOW, SESSION, "SPY", False, "{}", data_age_min=float("inf"))
+        store.log_decision(NOW, SESSION, "QQQ", False, "{}", data_age_min=float("nan"))
+        assert store.data_age_samples(SESSION) == []
+        store.close()
+
+    def test_samples_are_scoped_to_the_session(self, tmp_path: Path) -> None:
+        store = StateStore(tmp_path / "s.db")
+        other = dt.date(2026, 6, 18)
+        store.log_decision(NOW, SESSION, "SPY", False, "{}", data_age_min=1.0)
+        store.log_decision(NOW, other, "SPY", False, "{}", data_age_min=9.0)
+        assert [a for _, _, a in store.data_age_samples(SESSION)] == [1.0]
+        store.close()
+
+    def test_the_golden_ledger_reader_is_unchanged_by_the_new_column(self, tmp_path: Path) -> None:
+        """The load-bearing guarantee: decisions_for_session SELECTs four named
+        columns, so the golden ledger built from it cannot shift a byte. If this
+        ever returns 5-tuples, every golden fixture silently needs regenerating."""
+        store = StateStore(tmp_path / "s.db")
+        store.log_decision(NOW, SESSION, "SPY", True, "{}", data_age_min=3.3)
+        rows = store.decisions_for_session(SESSION)
+        assert len(rows) == 1
+        assert len(rows[0]) == 4, "a new column must not widen the golden reader"
+        store.close()
+
+
+class TestSchemaMigration:
+    """The bug every fresh-db test missed.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so adding a
+    column to _SCHEMA does nothing for a database already on disk. All 578 tests
+    used a fresh tmp_path db and passed; the owner's real paper.db — two live
+    sessions, 121 decisions — raised `no such column: data_age_min` on the first
+    real `qts doctor` run. This class opens a db built with the OLD schema.
+    """
+
+    OLD_DECISIONS = """
+    CREATE TABLE decisions (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_date    TEXT NOT NULL,
+        ts              TEXT NOT NULL,
+        symbol          TEXT NOT NULL,
+        approved        INTEGER NOT NULL,
+        decision_json   TEXT NOT NULL
+    );
+    """
+
+    def _legacy_db(self, path: Path) -> None:
+        con = sqlite3.connect(path)
+        con.executescript(self.OLD_DECISIONS)
+        con.execute(
+            "INSERT INTO decisions (session_date, ts, symbol, approved, decision_json)"
+            " VALUES (?,?,?,?,?)",
+            (SESSION.isoformat(), NOW.isoformat(), "SPY", 0, "{}"),
+        )
+        con.commit()
+        con.close()
+
+    def test_opening_a_legacy_db_adds_the_column(self, tmp_path: Path) -> None:
+        db = tmp_path / "legacy.db"
+        self._legacy_db(db)
+        store = StateStore(db)
+        cols = {r[1] for r in store._conn.execute("PRAGMA table_info(decisions)")}
+        assert "data_age_min" in cols
+        store.close()
+
+    def test_pre_existing_rows_survive_untouched(self, tmp_path: Path) -> None:
+        """A migration that loses two sessions of history is worse than the bug."""
+        db = tmp_path / "legacy.db"
+        self._legacy_db(db)
+        store = StateStore(db)
+        rows = store.decisions_for_session(SESSION)
+        assert len(rows) == 1
+        assert rows[0][1] == "SPY"
+        store.close()
+
+    def test_the_new_reader_works_on_a_migrated_db(self, tmp_path: Path) -> None:
+        db = tmp_path / "legacy.db"
+        self._legacy_db(db)
+        store = StateStore(db)
+        assert store.data_age_samples(SESSION) == []  # legacy rows have no age
+        store.log_decision(NOW, SESSION, "QQQ", False, "{}", data_age_min=2.5)
+        assert store.data_age_samples(SESSION) == [(NOW.isoformat(), "QQQ", 2.5)]
+        store.close()
+
+    def test_migration_is_idempotent(self, tmp_path: Path) -> None:
+        db = tmp_path / "legacy.db"
+        self._legacy_db(db)
+        for _ in range(3):
+            StateStore(db).close()
+        store = StateStore(db)
+        cols = [r[1] for r in store._conn.execute("PRAGMA table_info(decisions)")]
+        assert cols.count("data_age_min") == 1
+        store.close()

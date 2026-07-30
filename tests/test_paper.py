@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import dataclasses as dc
 import datetime as dt
+import math
 from pathlib import Path
 
+from qts_core import paper
 from qts_core.broker import PaperBroker
 from qts_core.clock import NY
 from qts_core.config import StrategyConfig
@@ -585,3 +588,63 @@ class TestDataStalenessGate:
         assert r.position is not None and r.position.phase is Phase.CLOSED
         sells = [o for o in s.store.orders_for_session(SESSION) if o["side"] == "SELL"]
         assert sells and sells[0]["reason"] == "STOP"
+
+
+class TestEmptyViewIsMaximallyStale:
+    """A-08. `_bar_age_min` returned None for a view with zero bars, and the
+    gate is written `age_min is not None and age_min > limit` — so the most
+    extreme case of unusable data skipped the staleness gate entirely and fell
+    through to evaluate_entry, which logged a 'decision' whose every check value
+    was n/a. 31 of the 121 decisions on record contain such a check."""
+
+    def test_no_bars_reports_infinite_age_not_none(self) -> None:
+        view = dc.replace(make_view(), bars=(), prior_sessions=())
+        age = paper._bar_age_min(view)
+        assert age == math.inf, "no newest bar means maximally stale, not unknown"
+
+    def test_bars_present_still_report_a_finite_age(self) -> None:
+        age = paper._bar_age_min(make_view())
+        # NOT `age or math.inf`: a legitimate age of 0.0 is falsy, so that idiom
+        # reports "infinitely stale" for the freshest data possible. My first
+        # version of this assertion had exactly that bug and it failed here.
+        assert age is not None
+        assert math.isfinite(age)
+
+    def test_with_the_gate_on_an_empty_view_halts_instead_of_deciding(self, tmp_path: Path) -> None:
+        """The behaviour that was missing: refuse, rather than emit a decision
+        made of n/a values."""
+        cfg = dc.replace(CFG, staleness_gate_enabled=True)
+        session = make_session(tmp_path / "s.db", cfg=cfg)
+        store = session.store
+        result = session.step(dc.replace(make_view(), bars=(), prior_sessions=()))
+        assert result.halted == "STALE_DATA:NO_BARS"
+        assert result.decision is None, "an empty view must not produce a decision"
+        assert store.decisions_for_session(SESSION) == []
+        store.close()
+
+    def test_with_the_gate_off_the_default_path_is_unchanged(self, tmp_path: Path) -> None:
+        """staleness_gate_enabled is False by default, so A-08 must not alter a
+        single default-path behaviour — only what happens once the rail is on."""
+        session = make_session(tmp_path / "s.db")
+        store = session.store
+        result = session.step(dc.replace(make_view(), bars=(), prior_sessions=()))
+        assert result.halted is None
+        assert result.decision is not None, "gate OFF still evaluates, as before"
+        store.close()
+
+    def test_an_infinite_age_is_not_written_to_the_db(self, tmp_path: Path) -> None:
+        """It reaches log_decision, which stores NULL rather than a fake number."""
+        session = make_session(tmp_path / "s.db")
+        store = session.store
+        session.step(dc.replace(make_view(), bars=(), prior_sessions=()))
+        assert store.data_age_samples(SESSION) == []
+        store.close()
+
+    def test_a_normal_step_does_persist_its_measured_age(self, tmp_path: Path) -> None:
+        session = make_session(tmp_path / "s.db")
+        store = session.store
+        session.step(make_view())
+        samples = store.data_age_samples(SESSION)
+        assert len(samples) == 1
+        assert samples[0][2] >= 0.0
+        store.close()
