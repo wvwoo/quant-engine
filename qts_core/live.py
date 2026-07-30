@@ -41,7 +41,8 @@ from qts_core.clock import (
 from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.money import TickSchedule
 from qts_core.paper import PaperSession
-from qts_core.providers.yfinance_source import YFinanceSource
+from qts_core.providers import OptionChainSource
+from qts_core.providers.registry import available, make_source
 from qts_core.report import render_session_report
 from qts_core.secrets import SecretsFileInsecure
 from qts_core.store import BackendMismatchError, StateStore
@@ -52,8 +53,21 @@ def _guarded[T](symbol: str, fn: Callable[..., T], *args: object) -> T | None:
     try:
         return fn(*args)
     except Exception as exc:
-        print(f"[error] {symbol}: {type(exc).__name__}: {exc}")
+        print(f"[error] {symbol}: {type(exc).__name__}: {secrets.redact(exc)}")
         return None
+
+
+def _source_for(symbol: str, provider: str | None, cfg: StrategyConfig) -> OptionChainSource:
+    """Build this run's data source.
+
+    A named seam rather than `YFinanceSource(symbol)` inline. Two reasons, and
+    the second is the one that matters:
+      1. it is where --provider / QTS_DATA_PROVIDER take effect;
+      2. cfg is threaded through. The old call passed no config at all, so the
+         provider quietly built its own StrategyConfig() — which would have made
+         a provider flag inert for anything config-shaped (finding P2).
+    """
+    return make_source(symbol, name=provider, cfg=cfg)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=["model", "alpaca_paper"],
         default=None,
         help="override cfg.broker_backend for this run (ADR-012)",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=list(available()),
+        default=None,
+        help="data provider for this run; overrides QTS_DATA_PROVIDER (default yfinance)",
     )
     parser.add_argument("--report", default=None, help="write session report to this path")
     args = parser.parse_args(argv)
@@ -194,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
             force_flat_at=force_flat,
             symbol=symbol,
         )
-        source = YFinanceSource(symbol)
+        source = _source_for(symbol, args.provider, cfg)
         view = None
         try:
             # B4: 0DTE availability is CHECKED per symbol per day, never assumed.

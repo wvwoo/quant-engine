@@ -8,7 +8,11 @@ __pycache__/
 *.egg-info/
 
 # --- virtualenv (28 packages, ~hundreds of MB) ---
+# No trailing slash: in a git worktree .venv is often a SYMLINK to the primary
+# checkout's venv, and `.venv/` matches directories only — so `git add -A` cheerfully
+# committed an absolute-path symlink pointing outside the repo. Verified, not assumed.
 qts_v8/venv/
+.venv
 .venv/
 venv/
 
@@ -20,12 +24,24 @@ qts_v8/state/*.json
 qts_v8/state/*.jsonl
 # session_report.md is regenerated on every run (gitignore has no inline comments)
 qts_v8/state/*.md
+# A-11: there was no *.log rule, so day_run_20260722.log was TRACKED while the
+# block above declared this directory 'regenerated; never a source of truth in
+# git'. Phase 5 adds a dated log per session, so this had to land first.
+qts_v8/state/*.log
 
 # --- secrets: never commit. Values live in the environment. ---
 .env
 .env.*
 !.env.example
+# `*secrets*` protects any file whose NAME suggests it holds key material. It is
+# deliberately broad and stays broad — but it also silently swallowed the source
+# module that MANAGES secrets: `git add -A` skipped qts_core/secrets.py and
+# tests/test_secrets.py while a commit message claimed to add them. Caught by
+# `git check-ignore -v`, not by reading. Source files are re-admitted by exact
+# path; anything else matching the glob is still ignored.
 *secrets*
+!qts_core/secrets.py
+!tests/test_secrets.py
 *.pem
 *.key
 

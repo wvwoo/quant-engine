@@ -29,14 +29,24 @@ from qts_core.clock import (
 )
 from qts_core.config import StrategyConfig, require_paper_mode
 from qts_core.money import fmt
-from qts_core.providers.yfinance_source import YFinanceSource
+from qts_core.providers.registry import available, make_source
 
 
 def build_sessions(
-    symbol: str, days: int, cfg: StrategyConfig, now: dt.datetime
+    symbol: str,
+    days: int,
+    cfg: StrategyConfig,
+    now: dt.datetime,
+    provider: str | None = None,
 ) -> list[SessionData]:
-    """Group real intraday bars into per-session SessionData, oldest first."""
-    source = YFinanceSource(symbol)
+    """Group real intraday bars into per-session SessionData, oldest first.
+
+    `provider` defaults to None so every existing caller keeps working
+    unchanged; None means "resolve QTS_DATA_PROVIDER, else yfinance", i.e. the
+    incumbent. cfg is threaded through the factory (finding P2) — it was not
+    reaching the provider before.
+    """
+    source = make_source(symbol, name=provider, cfg=cfg)
     bars = source.fetch_bars(
         now=now, days=min(days, cfg.max_intraday_days), interval_min=cfg.bar_interval_min
     )
@@ -154,6 +164,12 @@ def _diagnose(sessions: list[SessionData], cfg: StrategyConfig) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Backtest on real bars (MODELED options P&L).")
     ap.add_argument("--symbol", default="SPY")
+    ap.add_argument(
+        "--provider",
+        choices=list(available()),
+        default=None,
+        help="data provider; overrides QTS_DATA_PROVIDER (default yfinance)",
+    )
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--atm-iv", type=float, default=StrategyConfig().backtest_atm_iv)
     ap.add_argument(
@@ -173,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[halt] {exc.args[0]}")
         return 2
     now = TradingClock.system().now_utc()
-    sessions = build_sessions(args.symbol, args.days, cfg, now)
+    sessions = build_sessions(args.symbol, args.days, cfg, now, provider=args.provider)
     # Compare against the CONFIGURED default, not a second copy of the literal:
     # the two drifting apart would silently ignore --atm-iv (G-16).
     if args.atm_iv != cfg.backtest_atm_iv:

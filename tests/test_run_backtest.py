@@ -50,6 +50,24 @@ def _session_bars(day: dt.date, *, rising: bool, bars: int = 73) -> list[Bar]:
     return out
 
 
+def _wire_source(monkeypatch: pytest.MonkeyPatch, factory: object) -> None:
+    """Inject the data source.
+
+    SEAM CHANGE (A-07), same as tests/test_live.py::_wire and documented for the
+    same reason: these tests used to patch `rb.YFinanceSource`, i.e. the direct
+    construction of a concrete provider — precisely what the registry replaces.
+    build_sessions now resolves its source through `make_source`, so that is the
+    patch target. `factory` still takes one positional symbol, so every call
+    site below is unchanged in behaviour; no assertion was touched and no test
+    was removed.
+    """
+    monkeypatch.setattr(
+        rb,
+        "make_source",
+        lambda symbol, *, name=None, cfg=None: factory(symbol),  # type: ignore[operator]
+    )
+
+
 class FakeSource:
     def __init__(self, symbol: str, bars: list[Bar] | None = None) -> None:
         self.symbol = symbol
@@ -66,7 +84,7 @@ class FakeSource:
 
 @pytest.fixture
 def wired(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rb, "YFinanceSource", FakeSource)
+    _wire_source(monkeypatch, FakeSource)
 
     class FrozenClock:
         @classmethod
@@ -101,7 +119,7 @@ class TestBuildSessions:
     def test_no_usable_sessions_is_reported_not_crashed(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(rb, "YFinanceSource", lambda s: FakeSource(s, bars=[]))
+        _wire_source(monkeypatch, lambda s: FakeSource(s, bars=[]))
         rc = rb.main(["--symbol", "SPY", "--days", "5"])
         assert rc == 1
         assert "no usable sessions" in capsys.readouterr().out
@@ -147,7 +165,7 @@ class TestMainOutput:
         def exploding(symbol: str) -> FakeSource:  # pragma: no cover - never runs
             raise AssertionError("provider was built before the paper-mode gate")
 
-        monkeypatch.setattr(rb, "YFinanceSource", exploding)
+        _wire_source(monkeypatch, exploding)
         monkeypatch.setattr(rb, "StrategyConfig", lambda: StrategyConfig(live_trading=True))
         monkeypatch.delenv("QTS_LIVE_TRADING_OWNER_ACK", raising=False)
         with pytest.raises(LiveTradingBlocked):
@@ -169,7 +187,7 @@ class TestIncompleteSessionsAreExcluded:
             rows.extend(_session_bars(day, rising=False))
         # today: only the morning has happened
         rows.extend(_session_bars(DAYS[2], rising=True, bars=24))
-        monkeypatch.setattr(rb, "YFinanceSource", lambda s: FakeSource(s, bars=rows))
+        _wire_source(monkeypatch, lambda s: FakeSource(s, bars=rows))
         sessions = rb.build_sessions("SPY", 30, CFG, NOW)
         assert DAYS[2] not in [s.session_date for s in sessions]
         assert "excluded 1 incomplete session" in capsys.readouterr().out
@@ -288,7 +306,7 @@ class TestUnknownSymbolFailsBeforeTheNetwork:
         def exploding(symbol: str) -> FakeSource:  # pragma: no cover - never runs
             raise AssertionError("the provider was reached for an unconfigured symbol")
 
-        monkeypatch.setattr(rb, "YFinanceSource", exploding)
+        _wire_source(monkeypatch, exploding)
         rc = rb.main(["--symbol", "AAPL", "--days", "5"])
         assert rc == 2
         out = capsys.readouterr().out

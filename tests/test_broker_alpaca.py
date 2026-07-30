@@ -9,6 +9,7 @@ two-eyes change by construction.
 from __future__ import annotations
 
 import datetime as dt
+import email.message
 import io
 import urllib.error
 import urllib.request
@@ -280,7 +281,11 @@ class TestUnreachableHostIsItsOwnFailure:
 
         def http_401(req: Any, timeout: float = 0) -> Any:
             raise urllib.error.HTTPError(
-                ALPACA_PAPER_BASE_URL, 401, "Unauthorized", {}, io.BytesIO(b'{"m":"no"}')
+                ALPACA_PAPER_BASE_URL,
+                401,
+                "Unauthorized",
+                email.message.Message(),
+                io.BytesIO(b'{"m":"no"}'),
             )
 
         monkeypatch.setattr(urllib.request, "urlopen", http_401)

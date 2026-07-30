@@ -270,8 +270,11 @@ class TestRequestIntervalIsValidatedAtUseNotImport:
         import importlib
 
         monkeypatch.setenv("QTS_MIN_REQUEST_INTERVAL_S", "1,5")
-        importlib.reload(yfs)  # would raise ValueError before this fix
-        assert yfs.YFinanceSource  # module usable
+        importlib.reload(yfs)  # would raise ValueError at import before this fix
+        # ...and the bad value is still caught, just at the point of USE, with a
+        # message that names the variable. Deferred, not discarded.
+        with pytest.raises(yfs.InvalidRequestInterval, match="QTS_MIN_REQUEST_INTERVAL_S"):
+            yfs.request_interval_s()
 
     def test_live_and_run_backtest_still_import_with_a_bad_value(
         self, monkeypatch: pytest.MonkeyPatch
@@ -285,8 +288,8 @@ class TestRequestIntervalIsValidatedAtUseNotImport:
         import qts_core.live as _live
         import qts_core.run_backtest as _rb
 
-        assert importlib.reload(_live).main
-        assert importlib.reload(_rb).main
+        assert callable(importlib.reload(_live).main)
+        assert callable(importlib.reload(_rb).main)
 
     def test_the_limiter_is_shared_per_process(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Yahoo throttles per client, so a per-source limiter would let a

@@ -64,9 +64,35 @@ def _wire(
     factory: Callable[[str], object],
     cfg: StrategyConfig = CFG,
 ) -> None:
+    """Inject the clock, the data source and the config.
+
+    SEAM CHANGE (A-07), documented because it touches an existing helper: this
+    used to patch `live.YFinanceSource` — the test seam WAS the direct
+    construction of a concrete provider, which is exactly what the registry
+    replaces. The patch target is now `live._source_for`, the named factory the
+    --provider flag flows through.
+
+    Only this helper changed. Every test's assertions are untouched, no test was
+    deleted, and none was weakened: the fake source is still injected and still
+    exercises the same code paths. Patching a factory rather than a class name
+    is also strictly closer to what ships, since production now goes through
+    that factory too.
+    """
     monkeypatch.setattr(live, "TradingClock", FakeClock)
-    monkeypatch.setattr(live, "YFinanceSource", factory)
+    monkeypatch.setattr(live, "_source_for", lambda symbol, provider, config: factory(symbol))
     monkeypatch.setattr(live, "StrategyConfig", lambda: cfg)
+
+
+def _patch_source(monkeypatch: pytest.MonkeyPatch, factory: Callable[[str], object]) -> None:
+    """Patch only the data source, leaving the clock as the test set it.
+
+    Same A-07 seam move as _wire: the target is `live._source_for`, not the
+    concrete `live.YFinanceSource` name that no longer exists. Worth recording
+    that the stale patches failed LOUDLY (monkeypatch.setattr raises
+    AttributeError on a missing attribute) rather than silently patching nothing
+    and letting three rail tests pass against the real provider.
+    """
+    monkeypatch.setattr(live, "_source_for", lambda symbol, provider, config: factory(symbol))
 
 
 class TestPaperModeGate:
@@ -213,7 +239,7 @@ class TestRailSurvivesProviderFailure:
         db = tmp_path / "p.db"
         self._holding(db)
         monkeypatch.setattr(live, "TradingClock", self._late_clock())
-        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, raises=True))
+        _patch_source(monkeypatch, lambda s: FakeSource(s, raises=True))
         monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
         live.main(["--db", str(db), "--symbols", "NVDA"])
         store = StateStore(db)
@@ -228,7 +254,7 @@ class TestRailSurvivesProviderFailure:
         db = tmp_path / "p.db"
         self._holding(db)
         monkeypatch.setattr(live, "TradingClock", self._late_clock())
-        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s, has_expiry=False))
+        _patch_source(monkeypatch, lambda s: FakeSource(s, has_expiry=False))
         monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
         live.main(["--db", str(db), "--symbols", "NVDA"])
         store = StateStore(db)
@@ -391,7 +417,7 @@ class TestConfigGapDoesNotStrandItsOwnPosition:
                 return dt.datetime(2026, 6, 17, 15, 35, tzinfo=NY).astimezone(dt.UTC)
 
         monkeypatch.setattr(live, "TradingClock", LateClock)
-        monkeypatch.setattr(live, "YFinanceSource", lambda s: FakeSource(s))
+        _patch_source(monkeypatch, lambda s: FakeSource(s))
         monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
         rc = live.main(["--db", str(db), "--symbols", "AAPL"])
         assert rc == 0
@@ -537,3 +563,97 @@ class TestRejectedKeyHaltsLikeAMissingOne:
         )
         assert live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"]) == 2
         assert closed, "StateStore.close() was never called on the halt path"
+
+
+class TestProviderSelectionIsRealNotDecorative:
+    """The success criterion for the provider lane: prove the switch switches.
+
+    A registry that resolves names but never changes what live.main() builds
+    would be decoration. These tests assert on the object main() actually
+    constructs, via the same seam production uses.
+    """
+
+    def test_default_run_builds_the_incumbent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from qts_core.providers.yfinance_source import YFinanceSource
+
+        monkeypatch.delenv("QTS_DATA_PROVIDER", raising=False)
+        built: list[object] = []
+        real = live._source_for
+        monkeypatch.setattr(live, "TradingClock", FakeClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+
+        def spy(symbol: str, provider: str | None, config: StrategyConfig) -> object:
+            src = real(symbol, provider, config)
+            built.append(src)
+            return FakeSource(symbol)
+
+        monkeypatch.setattr(live, "_source_for", spy)
+        live.main(["--db", str(tmp_path / "p.db"), "--symbols", "SPY"])
+        assert built and isinstance(built[0], YFinanceSource)
+
+    def test_provider_flag_builds_the_alpaca_source(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("APCA_API_KEY_ID", "keyid00000001")
+        monkeypatch.setenv("APCA_API_SECRET_KEY", "secret00000001")
+        built: list[object] = []
+        real = live._source_for
+        monkeypatch.setattr(live, "TradingClock", FakeClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+
+        def spy(symbol: str, provider: str | None, config: StrategyConfig) -> object:
+            built.append(real(symbol, provider, config))
+            return FakeSource(symbol)
+
+        monkeypatch.setattr(live, "_source_for", spy)
+        live.main(["--db", str(tmp_path / "p.db"), "--symbols", "SPY", "--provider", "alpaca"])
+        assert built and type(built[0]).__name__ == "AlpacaDataSource"
+
+    def test_env_var_builds_the_alpaca_source_without_a_flag(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("QTS_DATA_PROVIDER", "alpaca")
+        monkeypatch.setenv("APCA_API_KEY_ID", "keyid00000001")
+        monkeypatch.setenv("APCA_API_SECRET_KEY", "secret00000001")
+        built: list[object] = []
+        real = live._source_for
+        monkeypatch.setattr(live, "TradingClock", FakeClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: CFG)
+
+        def spy(symbol: str, provider: str | None, config: StrategyConfig) -> object:
+            built.append(real(symbol, provider, config))
+            return FakeSource(symbol)
+
+        monkeypatch.setattr(live, "_source_for", spy)
+        live.main(["--db", str(tmp_path / "p.db"), "--symbols", "SPY"])
+        assert built and type(built[0]).__name__ == "AlpacaDataSource"
+
+    def test_an_unknown_provider_is_refused_by_argparse(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A typo must not silently fall back to the default feed."""
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        with pytest.raises(SystemExit):
+            live.main(["--db", str(tmp_path / "p.db"), "--provider", "bloomberg"])
+
+    def test_cfg_reaches_the_provider(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Finding P2: the old call site passed no cfg, so a provider silently
+        built its own StrategyConfig() and any config-shaped option was inert."""
+        monkeypatch.delenv("QTS_DATA_PROVIDER", raising=False)
+        cfg = dc.replace(CFG, bars_fetch_days=3)
+        built: list[object] = []
+        real = live._source_for
+        monkeypatch.setattr(live, "TradingClock", FakeClock)
+        monkeypatch.setattr(live, "StrategyConfig", lambda: cfg)
+
+        def spy(symbol: str, provider: str | None, config: StrategyConfig) -> object:
+            built.append(real(symbol, provider, config))
+            return FakeSource(symbol)
+
+        monkeypatch.setattr(live, "_source_for", spy)
+        live.main(["--db", str(tmp_path / "p.db"), "--symbols", "SPY"])
+        assert built[0].cfg.bars_fetch_days == 3  # type: ignore[attr-defined]
