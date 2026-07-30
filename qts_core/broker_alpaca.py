@@ -30,13 +30,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from qts_core import secrets
 from qts_core.broker import Fill
 from qts_core.money import CONTRACT_MULTIPLIER
 from qts_core.store import OrderIntent
@@ -49,7 +49,29 @@ Transport = Callable[[str, str, dict[str, Any] | None], tuple[int, dict[str, Any
 
 
 class AlpacaCredentialsMissing(RuntimeError):
-    """APCA_API_KEY_ID / APCA_API_SECRET_KEY are absent from the environment."""
+    """APCA_API_KEY_ID / APCA_API_SECRET_KEY are absent from env AND the file."""
+
+
+class AlpacaAccountRejected(RuntimeError):
+    """The keys are PRESENT but the venue refused them (HTTP 401/403).
+
+    A separate type from AlpacaCredentialsMissing on purpose (A-01). These are
+    different operator problems with different fixes — "you have not pasted a
+    key yet" versus "the key you pasted is wrong, revoked, or belongs to the
+    LIVE dashboard" — and they used to be indistinguishable to callers: the
+    absent path halted cleanly with rc 2 while a 401 raised a bare RuntimeError
+    that slipped past `except AlpacaCredentialsMissing` in live.py and became an
+    uncaught traceback. A rail that covers only the easy half is not a rail.
+    """
+
+
+class AlpacaUnreachable(RuntimeError):
+    """The paper host could not be reached at all (DNS/socket/TLS failure).
+
+    Also its own type: an offline laptop is neither a missing key nor a bad one,
+    and telling the owner to check their key when the network is down sends them
+    to the wrong place entirely.
+    """
 
 
 class AlpacaOrderNotFilled(RuntimeError):
@@ -78,6 +100,14 @@ def _default_transport(key_id: str, secret: str) -> Transport:
                 return resp.status, json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:  # error bodies are still JSON
             return exc.code, json.loads(exc.read() or b"{}")
+        except urllib.error.URLError as exc:
+            # Not an HTTP answer at all: no DNS, no route, TLS refused. Naming
+            # it here stops it escaping as an anonymous traceback three frames
+            # up, where the operator would have no idea the network was the
+            # cause (A-01).
+            raise AlpacaUnreachable(
+                f"alpaca paper host unreachable ({ALPACA_PAPER_BASE_URL}): {exc.reason}"
+            ) from exc
 
     return request
 
@@ -100,12 +130,18 @@ class AlpacaPaperBroker:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if transport is None:
-            key_id = os.environ.get("APCA_API_KEY_ID", "")
-            secret = os.environ.get("APCA_API_SECRET_KEY", "")
+            # Resolved through qts_core.secrets, NOT os.environ directly: a
+            # LaunchAgent inherits none of the login shell environment, so an
+            # env-only read made unattended operation impossible rather than
+            # merely awkward. secrets.get() checks the environment first and
+            # falls back to ~/.config/secrets.env (0600 enforced).
+            key_id = secrets.get("APCA_API_KEY_ID", required=False)
+            secret = secrets.get("APCA_API_SECRET_KEY", required=False)
             if not key_id or not secret:
                 raise AlpacaCredentialsMissing(
                     "set APCA_API_KEY_ID and APCA_API_SECRET_KEY (PAPER account keys) "
-                    "in the environment — this codebase never stores them"
+                    f"in the environment or in {secrets.secrets_file_path()} (mode 0600) "
+                    "— this codebase never stores them. Steps: KEY_ACQUISITION.md"
                 )
             transport = _default_transport(key_id, secret)
         self._request = transport
@@ -115,10 +151,26 @@ class AlpacaPaperBroker:
 
     # ------------------------------------------------------------------ api
     def verify_paper_account(self) -> str:
-        """Boot check: the account answers on the PAPER host. Returns its id."""
+        """Boot check: the account answers on the PAPER host. Returns its id.
+
+        Every message here passes through secrets.redact() because a venue is
+        free to echo the offending key back inside its own error body, and an
+        error path is exactly where nobody is watching for a leak.
+        """
         status, body = self._request("GET", "/v2/account", None)
+        if status in (401, 403):
+            raise AlpacaAccountRejected(
+                secrets.redact(
+                    f"alpaca REJECTED these keys (HTTP {status}). The keys are present but "
+                    "not accepted. Check they were generated on the PAPER dashboard "
+                    "(app.alpaca.markets/paper/...) and not the live one, and that they have "
+                    f"not been regenerated since. Venue said: {body}"
+                )
+            )
         if status != 200:
-            raise RuntimeError(f"alpaca paper account check failed: HTTP {status} {body}")
+            raise RuntimeError(
+                secrets.redact(f"alpaca paper account check failed: HTTP {status} {body}")
+            )
         return str(body.get("account_number", "?"))
 
     def execute(

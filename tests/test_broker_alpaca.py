@@ -9,15 +9,22 @@ two-eyes change by construction.
 from __future__ import annotations
 
 import datetime as dt
+import io
+import urllib.error
+import urllib.request
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from qts_core import secrets as sec
 from qts_core.broker_alpaca import (
     ALPACA_PAPER_BASE_URL,
+    AlpacaAccountRejected,
     AlpacaCredentialsMissing,
     AlpacaOrderNotFilled,
     AlpacaPaperBroker,
+    AlpacaUnreachable,
 )
 from qts_core.clock import NY
 from qts_core.store import OrderIntent, client_order_id
@@ -179,7 +186,159 @@ class TestAccountCheck:
         assert broker(t).verify_paper_account() == "PA3XYZ"
 
     def test_verify_fails_loud_on_auth_error(self) -> None:
+        """CHANGED for A-01, deliberately and in the STRICTER direction.
+
+        This test previously asserted only `RuntimeError, match="account check
+        failed"` for a 401. That message is now reserved for non-auth failures,
+        because collapsing "your key is wrong" into the same string as "the
+        venue returned a 500" is what let live.py mis-handle the auth case in
+        the first place. The assertion below is narrower than the one it
+        replaces (a specific subclass, not bare RuntimeError), so nothing was
+        weakened to make a change pass. Non-auth statuses keep the old contract
+        and are asserted in TestRejectedKeyIsItsOwnFailure.
+        """
         t = FakeTransport()
         t.final = (401, {"message": "unauthorized"})
-        with pytest.raises(RuntimeError, match="account check failed"):
+        with pytest.raises(AlpacaAccountRejected, match="REJECTED"):
             broker(t).verify_paper_account()
+
+
+class TestRejectedKeyIsItsOwnFailure:
+    """A-01. A key that is PRESENT but REJECTED is a different operator problem
+    from one that is ABSENT, and the two used to be indistinguishable: the
+    absent path halted cleanly (rc 2) while 401 raised a bare RuntimeError that
+    escaped live.py's `except AlpacaCredentialsMissing` and became a traceback."""
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_auth_status_raises_the_named_rejection_type(self, status: int) -> None:
+        t = FakeTransport()
+        t.final = (status, {"message": "forbidden"})
+        with pytest.raises(AlpacaAccountRejected) as exc:
+            broker(t).verify_paper_account()
+        assert str(status) in str(exc.value)
+
+    def test_rejection_and_missing_are_not_catchable_as_one_another(self) -> None:
+        assert not issubclass(AlpacaAccountRejected, AlpacaCredentialsMissing)
+        assert not issubclass(AlpacaCredentialsMissing, AlpacaAccountRejected)
+
+    def test_rejection_message_points_at_the_paper_dashboard(self) -> None:
+        t = FakeTransport()
+        t.final = (401, {"message": "unauthorized"})
+        with pytest.raises(AlpacaAccountRejected) as exc:
+            broker(t).verify_paper_account()
+        msg = str(exc.value).lower()
+        assert "rejected" in msg
+        assert "paper" in msg
+
+    def test_a_non_auth_failure_stays_a_plain_check_failure(self) -> None:
+        """500 is the venue's problem, not the key's — do not misdiagnose it."""
+        t = FakeTransport()
+        t.final = (500, {"message": "boom"})
+        with pytest.raises(RuntimeError, match="account check failed") as exc:
+            broker(t).verify_paper_account()
+        assert not isinstance(exc.value, AlpacaAccountRejected)
+
+    def test_the_error_body_is_redacted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A venue that echoes the key back in an error body must not leak it."""
+        marked = "PKZZLEAKCANARY000001"
+        monkeypatch.setenv("APCA_API_KEY_ID", marked)
+        sec.get("APCA_API_KEY_ID")  # registers it for redaction
+        t = FakeTransport()
+        t.final = (401, {"message": f"key {marked} is not authorized"})
+        with pytest.raises(AlpacaAccountRejected) as exc:
+            broker(t).verify_paper_account()
+        assert marked not in str(exc.value)
+        assert sec.REDACTED in str(exc.value)
+
+
+class TestUnreachableHostIsItsOwnFailure:
+    def test_default_transport_url_error_becomes_a_named_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Network loss at boot must not surface as an anonymous traceback.
+
+        The translation lives in the DEFAULT transport (the only one that owns a
+        socket), so this exercises that real path by failing urlopen itself —
+        not by injecting a fake transport, which would test nothing that ships.
+        """
+        monkeypatch.setenv("APCA_API_KEY_ID", "keyid00000001")
+        monkeypatch.setenv("APCA_API_SECRET_KEY", "secret00000001")
+
+        def dead(req: Any, timeout: float = 0) -> Any:
+            raise urllib.error.URLError("no route to host")
+
+        monkeypatch.setattr(urllib.request, "urlopen", dead)
+        with pytest.raises(AlpacaUnreachable, match="unreachable"):
+            AlpacaPaperBroker().verify_paper_account()
+
+    def test_an_http_error_is_still_translated_to_a_status_not_an_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HTTPError carries a real status, so it must NOT become Unreachable."""
+        monkeypatch.setenv("APCA_API_KEY_ID", "keyid00000001")
+        monkeypatch.setenv("APCA_API_SECRET_KEY", "secret00000001")
+
+        def http_401(req: Any, timeout: float = 0) -> Any:
+            raise urllib.error.HTTPError(
+                ALPACA_PAPER_BASE_URL, 401, "Unauthorized", {}, io.BytesIO(b'{"m":"no"}')
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", http_401)
+        with pytest.raises(AlpacaAccountRejected):
+            AlpacaPaperBroker().verify_paper_account()
+
+    def test_unreachable_is_distinct_from_rejected_and_missing(self) -> None:
+        assert not issubclass(AlpacaUnreachable, AlpacaAccountRejected)
+        assert not issubclass(AlpacaUnreachable, AlpacaCredentialsMissing)
+
+
+class TestCredentialsComeFromTheSecretsLoader:
+    """Keys must resolve through qts_core.secrets so an unattended LaunchAgent —
+    which inherits none of the login shell environment — can authenticate."""
+
+    def test_keys_are_sourced_from_the_secrets_file_when_env_is_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "s.env"
+        f.write_text("APCA_API_KEY_ID=fileKeyId0001\nAPCA_API_SECRET_KEY=fileSecret0001\n")
+        f.chmod(0o600)
+        monkeypatch.setenv("QTS_SECRETS_FILE", str(f))
+        monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+        monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+
+        seen: dict[str, str] = {}
+
+        class Sentinel(Exception):
+            pass
+
+        def capture(req: Any, timeout: float = 0) -> Any:
+            seen.update({k.lower(): v for k, v in req.headers.items()})
+            raise Sentinel
+
+        monkeypatch.setattr(urllib.request, "urlopen", capture)
+        with pytest.raises(Sentinel):
+            AlpacaPaperBroker().verify_paper_account()
+        # The file's values reached the wire headers — nothing else could have.
+        assert seen["Apca-api-key-id".lower()] == "fileKeyId0001"
+        assert seen["Apca-api-secret-key".lower()] == "fileSecret0001"
+
+    def test_still_fails_closed_when_neither_env_nor_file_has_keys(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("QTS_SECRETS_FILE", str(tmp_path / "absent.env"))
+        monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+        monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+        with pytest.raises(AlpacaCredentialsMissing, match="PAPER account keys"):
+            AlpacaPaperBroker()
+
+    def test_an_insecure_secrets_file_is_refused_not_silently_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "s.env"
+        f.write_text("APCA_API_KEY_ID=x000000000000\nAPCA_API_SECRET_KEY=y000000000000\n")
+        f.chmod(0o644)
+        monkeypatch.setenv("QTS_SECRETS_FILE", str(f))
+        monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+        monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+        with pytest.raises(sec.SecretsFileInsecure):
+            AlpacaPaperBroker()

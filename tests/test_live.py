@@ -449,3 +449,91 @@ class TestAlpacaBridgeWiring:
         _wire(monkeypatch, lambda s: FakeSource(s))
         assert live.main(["--db", str(db), "--symbols", "NVDA"]) == 0
         assert StateStore(db).backend() == "model"
+
+
+class TestRejectedKeyHaltsLikeAMissingOne:
+    """A-01. The ABSENT-key path already halted cleanly with rc 2; the
+    REJECTED-key path produced an uncaught traceback and left the StateStore
+    open. Both are operator problems the loop must survive and report."""
+
+    @staticmethod
+    def _broker_raising(exc: Exception) -> object:
+        class Boom:
+            def __init__(self, *a: object, **k: object) -> None:
+                raise exc
+
+        return Boom
+
+    def test_rejected_key_halts_with_rc_2_and_a_distinct_message(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from qts_core.broker_alpaca import AlpacaAccountRejected
+
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        monkeypatch.setattr(
+            live,
+            "AlpacaPaperBroker",
+            self._broker_raising(AlpacaAccountRejected("alpaca REJECTED these keys (HTTP 401)")),
+        )
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"])
+        out = capsys.readouterr().out
+        assert rc == 2, "a rejected key must halt, not traceback"
+        assert "[halt]" in out
+        assert "REJECTED" in out
+        # The two diagnoses must not be confused with one another.
+        assert "PAPER account keys" not in out, "rejected is not the same as absent"
+
+    def test_unreachable_host_halts_with_rc_2_and_says_so(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from qts_core.broker_alpaca import AlpacaUnreachable
+
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        monkeypatch.setattr(
+            live,
+            "AlpacaPaperBroker",
+            self._broker_raising(AlpacaUnreachable("alpaca paper host unreachable: timed out")),
+        )
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"])
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "unreachable" in out
+
+    def test_an_insecure_secrets_file_halts_instead_of_tracebacking(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The refusal to read a 0644 secrets file must reach the operator as a
+        halt carrying the chmod fix, not as a trace from inside the loader."""
+        f = tmp_path / "s.env"
+        f.write_text("APCA_API_KEY_ID=aaaaaaaaaaaa\nAPCA_API_SECRET_KEY=bbbbbbbbbbbb\n")
+        f.chmod(0o644)
+        monkeypatch.setenv("QTS_SECRETS_FILE", str(f))
+        monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+        monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        rc = live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"])
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "chmod 600" in out
+
+    def test_the_store_is_closed_on_the_broker_halt_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Not for fd hygiene (the process exits anyway) but so the halt path is
+        indistinguishable from the clean one to whatever opens the db next."""
+        from qts_core.broker_alpaca import AlpacaAccountRejected
+
+        closed: list[bool] = []
+        real_close = StateStore.close
+
+        def spy(self: StateStore) -> None:
+            closed.append(True)
+            real_close(self)
+
+        monkeypatch.setattr(StateStore, "close", spy)
+        _wire(monkeypatch, lambda s: FakeSource(s))
+        monkeypatch.setattr(
+            live, "AlpacaPaperBroker", self._broker_raising(AlpacaAccountRejected("nope"))
+        )
+        assert live.main(["--db", str(tmp_path / "p.db"), "--broker", "alpaca_paper"]) == 2
+        assert closed, "StateStore.close() was never called on the halt path"

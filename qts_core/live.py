@@ -24,8 +24,14 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from qts_core import secrets
 from qts_core.broker import PaperBroker
-from qts_core.broker_alpaca import AlpacaCredentialsMissing, AlpacaPaperBroker
+from qts_core.broker_alpaca import (
+    AlpacaAccountRejected,
+    AlpacaCredentialsMissing,
+    AlpacaPaperBroker,
+    AlpacaUnreachable,
+)
 from qts_core.clock import (
     TradingClock,
     effective_force_flat_et,
@@ -37,6 +43,7 @@ from qts_core.money import TickSchedule
 from qts_core.paper import PaperSession
 from qts_core.providers.yfinance_source import YFinanceSource
 from qts_core.report import render_session_report
+from qts_core.secrets import SecretsFileInsecure
 from qts_core.store import BackendMismatchError, StateStore
 
 
@@ -113,8 +120,20 @@ def main(argv: list[str] | None = None) -> int:
         try:
             alpaca = AlpacaPaperBroker()
             print(f"[broker] alpaca PAPER account {alpaca.verify_paper_account()} verified")
-        except AlpacaCredentialsMissing as exc:
-            print(f"[halt] {exc}")
+        except (
+            AlpacaCredentialsMissing,  # no key pasted yet
+            AlpacaAccountRejected,  # key present, venue refused it (A-01)
+            AlpacaUnreachable,  # network down — neither of the above
+            SecretsFileInsecure,  # 0644 secrets file: refused, with the fix
+        ) as exc:
+            # A-01: this caught AlpacaCredentialsMissing ALONE, while
+            # verify_paper_account() raised a bare RuntimeError on 401/403 and
+            # urllib raised URLError on a dead network. Neither is a subclass of
+            # the caught type, so the two most likely real-world key failures
+            # escaped as tracebacks with the store still open. Each now has its
+            # own named type and its own message: "it did not work" is not a
+            # diagnosis, and the fix differs in every case.
+            print(f"[halt] {secrets.redact(exc)}")
             store.close()
             return 2
 
