@@ -199,3 +199,34 @@ Two clarifications where the code is narrower than it might be described:
 - A malformed `QTS_SESSION_DATE` produces an HTTP 500 on two routes, not a crash — and it also leaks one open
   SQLite connection per failing request, because `store = _store()` precedes `_session_date()` and the
   `try/finally: store.close()` begins after it (`api.py:65-69`, `:159-163`).
+
+---
+
+## Live verification addendum (2026-07-30, after this document's first draft)
+
+The **rejected-key** path was subsequently verified **against the real Alpaca
+paper endpoint**, not merely with a fake transport. A uniquely marked dummy key
+was exported and `python -m qts_core.live --broker alpaca_paper` was run against
+a fresh database:
+
+```
+$ APCA_API_KEY_ID=PKZZOWNERCANARY9911 python -m qts_core.live --db /tmp/canary_fresh.db --broker alpaca_paper
+[halt] alpaca REJECTED these keys (HTTP 401). The keys are present but not
+accepted. Check they were generated on the PAPER dashboard
+(app.alpaca.markets/paper/...) and not the live one, and that they have not been
+regenerated since. Venue said: {'message': 'unauthorized.'}
+rc=2      stderr lines: 0
+```
+
+Three things this proves that reading could not:
+
+| Claim | Evidence |
+|---|---|
+| a rejected key halts cleanly rather than tracebacking | exit code **2**, and **zero lines on stderr** — before this change the same scenario produced an uncaught traceback with `StateStore` still open |
+| the message distinguishes REJECTED from ABSENT | the text names the paper dashboard and never says "set APCA_API_KEY_ID" |
+| no key material escapes, even on an error path that echoes the venue's body | `grep -c PKZZOW` over stdout, stderr and the SQLite file: **0, 0, 0** |
+
+**Still NOT VERIFIED, and cannot be on this machine:** the *accepted* path.
+There are no valid Alpaca keys here, so "key accepted, account is paper, options
+level >= 2" is exercised only by injected fixtures in `tests/test_doctor.py`.
+That claim stays UNVERIFIED until the owner supplies a key and runs `qts doctor`.
