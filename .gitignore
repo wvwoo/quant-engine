@@ -88,3 +88,6 @@ service-account*.json
 .netrc
 .npmrc
 .pypirc
+
+# Local AI-assistant settings
+.claude/settings.local.json
