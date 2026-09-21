@@ -1,0 +1,5 @@
+#!/bin/sh
+# Secret scanning before every commit. The previous hook used `grep -P`, which macOS grep lacks,
+# so it silently scanned nothing. gitleaks covers the same key families and more.
+if command -v gitleaks >/dev/null 2>&1; then GL=gitleaks; else GL="$HOME/.local/bin/gitleaks"; fi
+exec "$GL" git --pre-commit --staged --redact --no-banner
