@@ -210,7 +210,7 @@ was exported and `python -m qts_core.live --broker alpaca_paper` was run against
 a fresh database:
 
 ```
-$ APCA_API_KEY_ID=PKZZOWNERCANARY9911 python -m qts_core.live --db /tmp/canary_fresh.db --broker alpaca_paper
+$ APCA_API_KEY_ID=PK<INVALID-CANARY-KEY> python -m qts_core.live --db /tmp/canary_fresh.db --broker alpaca_paper
 [halt] alpaca REJECTED these keys (HTTP 401). The keys are present but not
 accepted. Check they were generated on the PAPER dashboard
 (app.alpaca.markets/paper/...) and not the live one, and that they have not been

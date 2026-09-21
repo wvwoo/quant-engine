@@ -1,0 +1,2 @@
+# Planted fake keys in tests that prove the secret scanners work (not real credentials)
+tests/test_secrets.py:generic-api-key:285
