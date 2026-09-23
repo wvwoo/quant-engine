@@ -1,7 +1,7 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.14.2
-ast_serialize==0.6.0
+ast_serialize==0.11.2
 beautifulsoup4==4.15.0
 boolean.py==5.0
 CacheControl==0.14.4
